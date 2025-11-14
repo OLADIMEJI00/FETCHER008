@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deriv Advanced Chart</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:Inter,Arial;background:#000;color:#fff;height:100vh;display:flex;flex-direction:column}
+#bar{display:flex;flex-wrap:wrap;gap:8px;padding:10px;background:#111;border-bottom:1px solid #333;align-items:center;justify-content:center}
+#bar select,#bar button,#bar input{padding:6px 10px;border-radius:6px;border:1px solid #333;background:#000;color:#fff;font-size:13px}
+#bar button:hover{background:#222;cursor:pointer}.date-group{display:flex;gap:6px;align-items:center;border:1px solid #444;padding:6px;border-radius:6px;background:#0a0a0a}
+.date-group label{font-size:12px;color:#0f0}.date-input{width:130px}#status{margin-left:auto;font-size:13px;padding:4px 8px;border-radius:4px}
+.s-green{color:#0f0;background:rgba(0,255,0,0.1)}.s-yellow{color:#ff0;background:rgba(255,255,0,0.1)}.s-red{color:#f33;background:rgba(255,51,51,0.1)}
+#main{flex:1;position:relative}#chart{width:100%;height:100%}#countdown{position:absolute;top:10px;right:10px;background:rgba(0,0,0,0.8);color:#0f0;padding:6px 12px;border-radius:6px;font-weight:bold;z-index:100}
+#spinner{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.95);padding:20px;border-radius:8px;display:none;z-index:200;text-align:center;min-width:300px}
+#spinner-text{font-size:14px;margin-bottom:10px}#spinner-sub{font-size:12px;color:#888;margin-top:6px}#progress-bar{width:100%;height:8px;background:#333;border-radius:4px;overflow:hidden;margin-top:10px}
+#progress-fill{height:100%;width:0%;background:linear-gradient(90deg,#0f0,#3f3);transition:width 0.3s}#info{padding:8px 16px;background:#0a0a0a;border-bottom:1px solid #222;font-size:13px;color:#7efc8a;display:flex;justify-content:space-between}
+#drawer{max-height:0;overflow:hidden;transition:max-height 0.3s;background:#0b0b0b;border-top:1px solid #333}#drawer.open{max-height:400px}#drawer-content{padding:20px}
+.section{margin-bottom:20px}.section h3{color:#0ff;margin-bottom:10px;font-size:14px}.controls{display:flex;gap:10px;flex-wrap:wrap}#results{padding:12px;background:#050505;border-radius:6px;color:#7efc8a;font-size:13px}
+@media (max-width:768px){#bar{gap:6px;padding:8px}.date-input{width:110px}#drawer-content{padding:12px}}
+.strategy-btn{position:relative;display:inline-block}
+.strategy-dropdown{display:none;position:absolute;background:#111;border:1px solid #333;border-radius:6px;min-width:200px;z-index:1000;margin-top:4px}
+.strategy-dropdown.show{display:block}
+.strategy-dropdown button{width:100%;text-align:left;padding:8px 12px;border:none;border-radius:0;background:#111;color:#fff;font-size:13px}
+.strategy-dropdown button:hover{background:#222}
+.strategy-dropdown button:first-child{border-radius:6px 6px 0 0}
+.strategy-dropdown button:last-child{border-radius:0 0 6px 6px}
+#strategyModal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.9);z-index:2000;justify-content:center;align-items:center}
+#strategyModal.show{display:flex}
+.modal-content{background:#111;border:1px solid #333;border-radius:8px;padding:20px;max-width:600px;width:90%}
+.modal-content h3{color:#0ff;margin-bottom:15px}
+.modal-content textarea{width:100%;height:300px;background:#000;border:1px solid #333;border-radius:6px;color:#0f0;padding:10px;font-family:monospace;font-size:12px;resize:vertical}
+.modal-buttons{display:flex;gap:10px;margin-top:15px;justify-content:flex-end}
+.modal-buttons button{padding:8px 16px;border-radius:6px;border:1px solid #333;background:#000;color:#fff;cursor:pointer}
+.modal-buttons button:hover{background:#222}
+.modal-buttons button.primary{background:#0f0;color:#000;border-color:#0f0}
+.modal-buttons button.primary:hover{background:#3f3}
+#strategyStatus{margin-left:8px;font-size:12px;color:#888}
+</style>
+</head>
+<body>
+
+<div id="bar">
+<select id="cat"><option>Loading...</option></select>
+<select id="sym"><option>Select symbol</option></select>
+<select id="tf"><option value="60">1m</option><option value="300">5m</option><option value="900">15m</option><option value="3600">1h</option></select>
+<select id="cnt"><option value="200">Last 200</option><option value="500">Last 500</option><option value="1000">Last 1K</option><option value="5000">Last 5K</option><option value="10000">Last 10K</option><option value="20000">Last 20K</option><option value="50000">Last 50K</option><option value="100000">Last 100K</option><option value="200000">Last 200K</option><option value="500000">Last 500K</option></select>
+<button id="loadH">Load Historical</button>
+<div class="date-group"><label>From:</label><input type="date" id="df" class="date-input" value=""><label>To:</label><input type="date" id="dt" class="date-input" value=""><button id="fetchR">Fetch Range</button></div>
+<button id="live">Live Stream</button><button id="csv">CSV</button><button id="xlsx">XLSX</button><button id="bt">⚙ Backtest</button>
+<div class="strategy-btn">
+<button id="strategyBtn">📊 Strategy</button><span id="strategyStatus"></span>
+<div id="strategyDropdown" class="strategy-dropdown">
+<button id="stratImmediate">Immediate Signal Test</button>
+<button id="stratRandom">Random Strategy</button>
+<button id="stratPaste">Paste Custom JS</button>
+<button id="stratUpload">Upload Strategy File</button>
+</div>
+</div>
+<button id="scrollStart">⏮</button><button id="scrollEnd">⏭</button>
+<span id="status" class="s-red">🔴 Disconnected</span>
+</div>
+
+<div id="info"><span id="infoTxt">Load data to begin</span><span id="pair">--</span></div>
+
+<div id="main">
+<div id="chart"></div>
+<div id="countdown">00:00</div>
+<div id="spinner"><div id="spinner-text">Loading...</div><div id="progress-bar"><div id="progress-fill"></div></div><div id="spinner-sub"></div></div>
+</div>
+
+<div id="drawer">
+<div id="drawer-content">
+<div class="section"><h3>Backtest Controls</h3>
+<div class="controls">
+<input type="number" id="slP" placeholder="SL %" step="0.1" style="width:100px;">
+<input type="number" id="tpP" placeholder="TP %" step="0.1" style="width:100px;">
+<input type="number" id="hold" placeholder="Hold candles" value="5" style="width:120px;">
+<button id="runBt">Run Backtest</button><button id="clr">Clear</button>
+</div>
+</div>
+<div class="section"><h3>Results</h3><div id="results">Run a backtest to see results</div></div>
+</div>
+</div>
+
+<div id="strategyModal">
+<div class="modal-content">
+<h3>Paste Custom Strategy JavaScript</h3>
+<textarea id="strategyCode" placeholder="// Paste your strategy function here
+// Example:
+// function customStrategy(data) {
+//   const signals = [];
+//   for (let i = 20; i < data.length; i++) {
+//     if (data[i].close > data[i].open) {
+//       signals.push({index: i, side: 'buy'});
+//     }
+//   }
+//   return signals;
+// }"></textarea>
+<div class="modal-buttons">
+<button id="modalCancel">Cancel</button>
+<button id="modalApply" class="primary">Apply Strategy</button>
+</div>
+</div>
+</div>
+
+<input type="file" id="strategyFileInput" accept=".js,.txt" style="display:none">
+
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+<script>
+(function checkLibs(){if(typeof LightweightCharts==='undefined'||typeof XLSX==='undefined'){setTimeout(checkLibs,100);return}init()})();
+
+function init(){
+const APP_ID=1089,WS_URL=`wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`,MAX=500000,BATCH=5000;
+let chart,series,socket,data=[],last=null,sym='',gran=60,markers=[],rangeStart=null,rangeEnd=null;
+let currentStrategy=null,strategyInterval=null,customStrategyFunc=null,chartReady=false,countdownInterval=null;
+let lastProcessedIndex=-1;
+
+// Technical Indicators
+function calculateSMA(data, period) {
+  const sma = [];
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) {
+      sma.push(null);
+    } else {
+      let sum = 0;
+      for (let j = 0; j < period; j++) {
+        sum += data[i - j].close;
+      }
+      sma.push(sum / period);
+    }
+  }
+  return sma;
+}
+
+function calculateEMA(data, period) {
+  const ema = [];
+  const multiplier = 2 / (period + 1);
+  let prevEMA = data[0].close;
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i === 0) {
+      ema.push(data[i].close);
+    } else {
+      const currentEMA = (data[i].close - prevEMA) * multiplier + prevEMA;
+      ema.push(currentEMA);
+      prevEMA = currentEMA;
+    }
+  }
+  return ema;
+}
+
+function calculateRSI(data, period = 14) {
+  const rsi = [];
+  const gains = [];
+  const losses = [];
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i === 0) {
+      rsi.push(null);
+      continue;
+    }
+    
+    const change = data[i].close - data[i - 1].close;
+    gains.push(change > 0 ? change : 0);
+    losses.push(change < 0 ? Math.abs(change) : 0);
+    
+    if (i < period) {
+      rsi.push(null);
+    } else {
+      const avgGain = gains.slice(-period).reduce((a, b) => a + b) / period;
+      const avgLoss = losses.slice(-period).reduce((a, b) => a + b) / period;
+      
+      if (avgLoss === 0) {
+        rsi.push(100);
+      } else {
+        const rs = avgGain / avgLoss;
+        rsi.push(100 - (100 / (1 + rs)));
+      }
+    }
+  }
+  return rsi;
+}
+
+function calculateMACD(data, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
+  const fastEMA = calculateEMA(data, fastPeriod);
+  const slowEMA = calculateEMA(data, slowPeriod);
+  
+  const macdLine = fastEMA.map((fast, i) => fast - slowEMA[i]);
+  
+  const macdData = macdLine.map((val, i) => ({ close: val || 0 }));
+  const signalLine = calculateEMA(macdData, signalPeriod);
+  
+  const histogram = macdLine.map((macd, i) => macd - signalLine[i]);
+  
+  return { macdLine, signalLine, histogram };
+}
+
+// Strategy: Immediate Signal Test (RSI + MA Crossover)
+function immediateSignalStrategy(data) {
+  const signals = [];
+  const sma20 = calculateSMA(data, 20);
+  const sma50 = calculateSMA(data, 50);
+  const rsi = calculateRSI(data, 14);
+  
+  for (let i = 50; i < data.length; i++) {
+    if (sma20[i] && sma50[i] && rsi[i]) {
+      // Buy signal: SMA20 crosses above SMA50 and RSI < 70
+      if (sma20[i] > sma50[i] && sma20[i - 1] <= sma50[i - 1] && rsi[i] < 70) {
+        signals.push({ time: data[i].time, position: 'belowBar', color: '#0f0', shape: 'arrowUp', text: 'BUY' });
+      }
+      // Sell signal: SMA20 crosses below SMA50 and RSI > 30
+      else if (sma20[i] < sma50[i] && sma20[i - 1] >= sma50[i - 1] && rsi[i] > 30) {
+        signals.push({ time: data[i].time, position: 'aboveBar', color: '#f33', shape: 'arrowDown', text: 'SELL' });
+      }
+    }
+  }
+  
+  return signals;
+}
+
+// Strategy: Random Strategy (Multiple Indicators) - Fixed to be deterministic
+function randomStrategy(data) {
+  const signals = [];
+  const ema12 = calculateEMA(data, 12);
+  const ema26 = calculateEMA(data, 26);
+  const rsi = calculateRSI(data, 14);
+  const macd = calculateMACD(data);
+  
+  for (let i = 30; i < data.length; i++) {
+    if (ema12[i] && ema26[i] && rsi[i] && macd.histogram[i]) {
+      // Buy signal: EMA12 > EMA26, RSI < 40, MACD histogram positive
+      if (ema12[i] > ema26[i] && rsi[i] < 40 && macd.histogram[i] > 0) {
+        signals.push({ time: data[i].time, position: 'belowBar', color: '#0f0', shape: 'arrowUp', text: 'BUY' });
+      }
+      // Sell signal: EMA12 < EMA26, RSI > 60, MACD histogram negative
+      else if (ema12[i] < ema26[i] && rsi[i] > 60 && macd.histogram[i] < 0) {
+        signals.push({ time: data[i].time, position: 'aboveBar', color: '#f33', shape: 'arrowDown', text: 'SELL' });
+      }
+      // Additional signals based on RSI extremes (deterministic - removed random)
+      else if (rsi[i] < 30 && macd.histogram[i] > 0) {
+        signals.push({ time: data[i].time, position: 'belowBar', color: '#0ff', shape: 'circle', text: 'R-BUY' });
+      }
+      else if (rsi[i] > 70 && macd.histogram[i] < 0) {
+        signals.push({ time: data[i].time, position: 'aboveBar', color: '#ff0', shape: 'circle', text: 'R-SELL' });
+      }
+    }
+  }
+  
+  return signals;
+}
+
+// Mark chart as ready for strategies
+function markChartReady() {
+  chartReady = true;
+  console.log('Chart marked as ready for strategy execution');
+  if (currentStrategy) {
+    applyCurrentStrategy();
+  }
+}
+
+// Apply current strategy to data - FIXED: Only recalculate all signals on initial load or full data change
+function applyCurrentStrategy() {
+  if (!chartReady || data.length === 0) return;
+  
+  let newMarkers = [];
+  
+  if (currentStrategy === 'immediate') {
+    newMarkers = immediateSignalStrategy(data);
+    updateStrategyStatus('Active: Immediate Signal Test');
+  } else if (currentStrategy === 'random') {
+    newMarkers = randomStrategy(data);
+    updateStrategyStatus('Active: Random Strategy');
+  } else if (currentStrategy === 'custom' && customStrategyFunc) {
+    try {
+      newMarkers = customStrategyFunc(data) || [];
+      updateStrategyStatus('Active: Custom Strategy');
+    } catch (err) {
+      console.error('Custom strategy error:', err);
+      updateStrategyStatus('Error in custom strategy');
+      return;
+    }
+  }
+  
+  markers = newMarkers;
+  series.setMarkers(markers);
+  lastProcessedIndex = data.length - 1;
+  console.log(`Applied ${currentStrategy} strategy: ${markers.length} signals generated`);
+}
+
+// Apply strategy for only new candles - FIXED: Incremental signal updates
+function applyStrategyIncremental() {
+  if (!chartReady || data.length === 0 || !currentStrategy) return;
+  
+  // Only process if we have new candles
+  if (lastProcessedIndex >= data.length - 1) return;
+  
+  // For live updates, recalculate signals for the last few candles to ensure accuracy
+  // but keep all previous signals intact
+  const lookbackCandles = 60; // Enough for indicators to stabilize
+  const startIndex = Math.max(0, data.length - lookbackCandles);
+  
+  // Remove markers from the recalculation range
+  const timeThreshold = data[startIndex].time;
+  const preservedMarkers = markers.filter(m => m.time < timeThreshold);
+  
+  let newMarkers = [];
+  const recalcData = data.slice(startIndex);
+  
+  if (currentStrategy === 'immediate') {
+    newMarkers = immediateSignalStrategy(recalcData);
+  } else if (currentStrategy === 'random') {
+    newMarkers = randomStrategy(recalcData);
+  } else if (currentStrategy === 'custom' && customStrategyFunc) {
+    try {
+      newMarkers = customStrategyFunc(recalcData) || [];
+    } catch (err) {
+      console.error('Custom strategy error:', err);
+      return;
+    }
+  }
+  
+  // Combine preserved and new markers
+  markers = [...preservedMarkers, ...newMarkers];
+  series.setMarkers(markers);
+  lastProcessedIndex = data.length - 1;
+}
+
+// Apply strategy
+function applyStrategy(strategyType) {
+  currentStrategy = strategyType;
+  lastProcessedIndex = -1;
+  
+  if (strategyInterval) {
+    clearInterval(strategyInterval);
+    strategyInterval = null;
+  }
+  
+  applyCurrentStrategy();
+  
+  // Start live signal monitoring - only update incrementally
+  strategyInterval = setInterval(() => {
+    if (chartReady && data.length > 0) {
+      applyStrategyIncremental();
+    }
+  }, 5000);
+}
+
+// Update strategy status display
+function updateStrategyStatus(status) {
+  document.getElementById('strategyStatus').textContent = status;
+}
+
+// Apply custom strategy from textarea
+function applyCustomStrategy() {
+  const code = document.getElementById('strategyCode').value.trim();
+  if (!code) {
+    alert('Please paste your strategy code');
+    return;
+  }
+  
+  try {
+    customStrategyFunc = new Function('data', code + '\n\nif (typeof customStrategy === "function") return customStrategy(data); else return [];');
+    currentStrategy = 'custom';
+    applyStrategy('custom');
+    document.getElementById('strategyModal').classList.remove('show');
+  } catch (err) {
+    alert('Error in strategy code: ' + err.message);
+    console.error(err);
+  }
+}
+
+// Handle strategy file upload
+function handleStrategyFileUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  
+  const reader = new FileReader();
+  reader.onload = function(event) {
+    const code = event.target.result;
+    document.getElementById('strategyCode').value = code;
+    document.getElementById('strategyModal').classList.add('show');
+  };
+  reader.readAsText(file);
+}
+
+// Init chart
+const container=document.getElementById('chart');
+chart=LightweightCharts.createChart(container,{width:container.clientWidth,height:container.clientHeight,layout:{background:{color:'#000'},textColor:'#fff'},grid:{vertLines:{color:'#222'},horzLines:{color:'#222'}},timeScale:{timeVisible:true,secondsVisible:false}});
+series=chart.addCandlestickSeries({upColor:'#0f0',downColor:'#f33',borderVisible:false,wickUpColor:'#0f0',wickDownColor:'#f33'});
+window.addEventListener('resize',()=>chart.applyOptions({width:container.clientWidth,height:container.clientHeight}));
+
+// Load symbols
+const catSel=document.getElementById('cat'),symSel=document.getElementById('sym');
+let symbolsData={},firstCandleDates={};
+catSel.innerHTML='<option>Loading markets...</option>';
+const ws=new WebSocket(WS_URL);
+ws.onopen=()=>ws.send(JSON.stringify({active_symbols:'brief',product_type:'basic'}));
+ws.onmessage=e=>{
+try{
+const d=JSON.parse(e.data);
+if(d.active_symbols&&Array.isArray(d.active_symbols)){
+const cats={};
+d.active_symbols.forEach(s=>{
+const c=s.market_display_name||s.market||'Other';
+if(!cats[c])cats[c]=[];
+cats[c].push(s);
+symbolsData[s.symbol]=s;
+});
+catSel.innerHTML='';Object.keys(cats).sort().forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=`${c} (${cats[c].length})`;catSel.appendChild(o)});
+catSel.onchange=()=>{
+symSel.innerHTML='';
+const sc=catSel.value;
+(cats[sc]||[]).forEach(s=>{
+const o=document.createElement('option');
+o.value=s.symbol;
+let label=s.display_name;
+if(firstCandleDates[s.symbol]){
+label+=` (From: ${firstCandleDates[s.symbol]})`;
+}
+o.textContent=label;
+symSel.appendChild(o);
+});
+};
+symSel.onchange=fetchFirstCandle;
+catSel.onchange();document.getElementById("status").className="s-green";document.getElementById("status").textContent="🟢 Ready";ws.close();
+}else if(d.error){catSel.innerHTML='<option>Error: '+d.error.message+'</option>';ws.close()}
+}catch(err){console.error(err)}
+};
+ws.onerror=()=>{catSel.innerHTML='<option>Connection failed</option>';setTimeout(()=>{catSel.innerHTML='<option>Tap to retry</option>';catSel.onclick=()=>{catSel.onclick=null;location.reload()}},1000)};
+
+// Event listeners
+document.getElementById('loadH').onclick=loadHist;
+document.getElementById('fetchR').onclick=fetchRange;
+document.getElementById('live').onclick=startLive;
+document.getElementById('csv').onclick=exportCSV;
+document.getElementById('xlsx').onclick=exportXLSX;
+document.getElementById('bt').onclick=()=>document.getElementById('drawer').classList.toggle('open');
+document.getElementById('runBt').onclick=runBacktest;
+document.getElementById('clr').onclick=()=>{document.getElementById('results').textContent='Run a backtest to see results';markers=[];series.setMarkers([])};
+symSel.onchange=fetchFirstCandle;
+document.getElementById('scrollStart').onclick=()=>{if(data.length>0)chart.timeScale().scrollToPosition(-data.length,false)};
+document.getElementById('scrollEnd').onclick=()=>{if(data.length>0)chart.timeScale().scrollToRealTime()};
+document.getElementById('df').value='';
+document.getElementById('dt').value='';
+
+// Strategy event listeners
+document.getElementById('strategyBtn').onclick=()=>document.getElementById('strategyDropdown').classList.toggle('show');
+document.getElementById('stratImmediate').onclick=()=>{applyStrategy('immediate');document.getElementById('strategyDropdown').classList.remove('show')};
+document.getElementById('stratRandom').onclick=()=>{applyStrategy('random');document.getElementById('strategyDropdown').classList.remove('show')};
+document.getElementById('stratPaste').onclick=()=>{document.getElementById('strategyModal').classList.add('show');document.getElementById('strategyDropdown').classList.remove('show')};
+document.getElementById('stratUpload').onclick=()=>{document.getElementById('strategyFileInput').click();document.getElementById('strategyDropdown').classList.remove('show')};
+document.getElementById('modalCancel').onclick=()=>document.getElementById('strategyModal').classList.remove('show');
+document.getElementById('modalApply').onclick=applyCustomStrategy;
+document.getElementById('strategyFileInput').onchange=handleStrategyFileUpload;
+document.addEventListener('click',e=>{if(!e.target.closest('.strategy-btn'))document.getElementById('strategyDropdown').classList.remove('show')});
+
+// Fetch first available candle date
+function fetchFirstCandle(){
+const s=symSel.value;
+if(!s||s==='Select symbol'||firstCandleDates[s])return;
+const ws=new WebSocket(WS_URL);
+const veryOldDate=Math.floor(new Date('2000-01-01').getTime()/1000);
+ws.onopen=()=>ws.send(JSON.stringify({ticks_history:s,adjust_start_time:1,count:1,start:veryOldDate,granularity:60,style:'candles'}));
+ws.onmessage=e=>{
+try{
+const d=JSON.parse(e.data);
+if(d.candles&&d.candles.length>0){
+const ts=d.candles[0].epoch;
+const dt=new Date(ts*1000).toISOString().split('T')[0];
+firstCandleDates[s]=dt;
+const opt=Array.from(symSel.options).find(o=>o.value===s);
+if(opt)opt.textContent=symbolsData[s].display_name+` (From: ${dt})`;
+}
+ws.close();
+}catch(err){console.error(err);ws.close()}
+};
+ws.onerror=()=>ws.close();
+}
+
+// Render data
+function render(){
+if(data.length===0)return;
+try{
+const validData=data.filter(c=>c&&c.time&&!isNaN(c.open)&&!isNaN(c.high)&&!isNaN(c.low)&&!isNaN(c.close));
+if(validData.length===0){
+console.error('No valid candle data to render');
+hideSpinner();
+return;
+}
+series.setData(validData);
+document.getElementById('pair').textContent=`${sym} | ${gran}s | ${validData.length} candles`;
+document.getElementById('infoTxt').textContent=`Loaded ${validData.length} candles`;
+chart.timeScale().fitContent();
+markChartReady();
+      try{ if(Array.isArray(data)) window.chartDataArray = data; }catch(e){}
+}catch(err){
+console.error('Error rendering chart:',err);
+hideSpinner();
+alert('Error displaying chart data. Please try again.');
+}
+}
+
+// Show/hide spinner
+function showSpinner(txt,sub=''){document.getElementById('spinner').style.display='block';document.getElementById('spinner-text').textContent=txt;document.getElementById('spinner-sub').textContent=sub;document.getElementById('progress-fill').style.width='0%'}
+function hideSpinner(){document.getElementById('spinner').style.display='none'}
+function updateProgress(pct){document.getElementById('progress-fill').style.width=pct+'%'}
+function formatDate(ts){const d=new Date(ts*1000);return d.toLocaleDateString('en-GB')}
+function calculateDays(start,end){return Math.ceil((end-start)/86400)}
+
+// Load historical data - FIXED: Continue loading even if batch is not exactly BATCH size
+function loadHist(){
+const s=symSel.value;
+if(!s||s==='Select symbol'){alert('Select a symbol');return}
+sym=s;gran=parseInt(document.getElementById('tf').value);
+const cnt=parseInt(document.getElementById('cnt').value);
+data=[];markers=[];series.setMarkers([]);lastProcessedIndex=-1;
+const estimatedDays=Math.ceil((cnt*gran)/86400);
+showSpinner(`Preparing to load ${cnt.toLocaleString()} candles (~${estimatedDays} days)...`,'Initializing connection...');
+chartReady=false;
+const ws=new WebSocket(WS_URL);
+let startTime=null;
+ws.onopen=()=>{
+const end=Math.floor(Date.now()/1000);
+ws.send(JSON.stringify({ticks_history:sym,adjust_start_time:1,count:Math.min(cnt,BATCH),end:end,granularity:gran,style:'candles'}));
+};
+let totalReceived=0;
+ws.onmessage=e=>{
+try{
+const d=JSON.parse(e.data);
+if(d.candles&&d.candles.length>0){
+const candles=d.candles.map(c=>({time:c.epoch,open:parseFloat(c.open),high:parseFloat(c.high),low:parseFloat(c.low),close:parseFloat(c.close)})).filter(c=>c&&c.time&&!isNaN(c.open)&&!isNaN(c.high)&&!isNaN(c.low)&&!isNaN(c.close));
+if(candles.length>0){
+data.push(...candles);
+totalReceived+=candles.length;
+if(startTime===null)startTime=candles[candles.length-1].time;
+const endTime=candles[0].time;
+const days=calculateDays(endTime,startTime);
+const dateRange=`${formatDate(endTime)} to ${formatDate(startTime)} (${days} days)`;
+updateProgress((totalReceived/cnt)*100);
+showSpinner(`Loading ${cnt.toLocaleString()} candles...`,`Fetched ${totalReceived.toLocaleString()} of ${cnt.toLocaleString()} | ${dateRange}`);
+if(totalReceived<cnt&&candles.length>0){
+const nextEnd=candles[0].time-1;
+ws.send(JSON.stringify({ticks_history:sym,adjust_start_time:1,count:Math.min(cnt-totalReceived,BATCH),end:nextEnd,granularity:gran,style:'candles'}));
+}else{
+data.sort((a,b)=>a.time-b.time);
+render();
+hideSpinner();
+ws.close();
+}
+}else{
+data.sort((a,b)=>a.time-b.time);
+render();
+hideSpinner();
+ws.close();
+}
+}else if(d.error){alert('Error: '+d.error.message);hideSpinner();ws.close()}
+}catch(err){console.error('Error processing candles:',err);hideSpinner();ws.close()}
+};
+ws.onerror=()=>{alert('Connection failed');hideSpinner()};
+}
+
+// Fetch date range - FIXED: Continue loading even if batch is not exactly BATCH size
+function fetchRange(){
+const s=symSel.value;
+if(!s||s==='Select symbol'){alert('Select a symbol');return}
+const fromDate=document.getElementById('df').value;
+const toDate=document.getElementById('dt').value;
+if(!fromDate||!toDate){alert('Select both dates');return}
+sym=s;gran=parseInt(document.getElementById('tf').value);
+const start=Math.floor(new Date(fromDate).getTime()/1000);
+const end=Math.floor(new Date(toDate).getTime()/1000)+86399;
+if(start>=end){alert('From date must be before To date');return}
+const estimatedCount=Math.floor((end-start)/gran);
+const totalDays=calculateDays(start,end);
+if(estimatedCount>MAX){alert(`Too many candles (~${estimatedCount.toLocaleString()}). Max is ${MAX.toLocaleString()}`);return}
+data=[];markers=[];series.setMarkers([]);lastProcessedIndex=-1;
+showSpinner(`Preparing to fetch ~${estimatedCount.toLocaleString()} candles...`,`Date range: ${formatDate(start)} to ${formatDate(end)} (${totalDays} days)`);
+chartReady=false;
+rangeStart=start;
+rangeEnd=end;
+const ws=new WebSocket(WS_URL);
+let currentEnd=end;
+let totalReceived=0;
+ws.onopen=()=>{
+ws.send(JSON.stringify({ticks_history:sym,adjust_start_time:1,start:start,end:currentEnd,granularity:gran,style:'candles'}));
+};
+ws.onmessage=e=>{
+try{
+const d=JSON.parse(e.data);
+if(d.candles&&d.candles.length>0){
+const candles=d.candles.map(c=>({time:c.epoch,open:parseFloat(c.open),high:parseFloat(c.high),low:parseFloat(c.low),close:parseFloat(c.close)})).filter(c=>c&&c.time&&!isNaN(c.open)&&!isNaN(c.high)&&!isNaN(c.low)&&!isNaN(c.close));
+if(candles.length>0){
+data.push(...candles);
+totalReceived+=candles.length;
+const progress=Math.min(100,(totalReceived/estimatedCount)*100);
+updateProgress(progress);
+const currentStart=candles[0].time;
+const currentDays=calculateDays(currentStart,end);
+showSpinner(`Fetching ${estimatedCount.toLocaleString()} candles...`,`Fetched ${totalReceived.toLocaleString()} of ${estimatedCount.toLocaleString()} | ${formatDate(currentStart)} to ${formatDate(end)} (${currentDays} days)`);
+if(candles[0].time>start){
+currentEnd=candles[0].time-1;
+ws.send(JSON.stringify({ticks_history:sym,adjust_start_time:1,start:start,end:currentEnd,granularity:gran,style:'candles'}));
+}else{
+const uniqueData=new Map();
+data.forEach(c=>uniqueData.set(c.time,c));
+data=Array.from(uniqueData.values()).sort((a,b)=>a.time-b.time);
+render();
+hideSpinner();
+ws.close();
+}
+}else{
+const uniqueData=new Map();
+data.forEach(c=>uniqueData.set(c.time,c));
+data=Array.from(uniqueData.values()).sort((a,b)=>a.time-b.time);
+render();
+hideSpinner();
+ws.close();
+}
+}else if(d.error){alert('Error: '+d.error.message);hideSpinner();ws.close()}
+}catch(err){console.error('Error processing candles:',err);hideSpinner();ws.close()}
+};
+ws.onerror=()=>{alert('Connection failed');hideSpinner()};
+}
+
+// Start live stream - FIXED: Normalize candle time to prevent duplicates
+function startLive(){
+if(!sym){alert('Load historical data first');return}
+if(socket){socket.close();socket=null}
+socket=new WebSocket(WS_URL);
+socket.onopen=()=>{
+socket.send(JSON.stringify({ticks_history:sym,adjust_start_time:1,count:1,end:'latest',granularity:gran,style:'candles',subscribe:1}));
+document.getElementById('status').className='s-yellow';
+document.getElementById('status').textContent='🟡 Connecting...';
+};
+socket.onmessage=e=>{
+try{
+const d=JSON.parse(e.data);
+if(d.ohlc){
+// FIXED: Normalize the epoch time to the candle period boundary
+const rawEpoch = d.ohlc.epoch;
+const normalizedTime = Math.floor(rawEpoch / gran) * gran;
+const c={time:normalizedTime,open:parseFloat(d.ohlc.open),high:parseFloat(d.ohlc.high),low:parseFloat(d.ohlc.low),close:parseFloat(d.ohlc.close)};
+const idx=data.findIndex(x=>x.time===c.time);
+if(idx>=0){
+// Update existing candle
+data[idx]=c;
+}else{
+// Add new candle
+data.push(c);
+}
+if(c&&c.time&&!isNaN(c.open)&&!isNaN(c.high)&&!isNaN(c.low)&&!isNaN(c.close)){series.update(c)}
+last=c;
+document.getElementById('status').className='s-green';
+document.getElementById('status').textContent='🟢 Live';
+updateCountdown(normalizedTime);
+}else if(d.error){console.error(d.error);document.getElementById('status').className='s-red';document.getElementById('status').textContent='🔴 Error'}
+}catch(err){console.error(err)}
+};
+socket.onerror=()=>{document.getElementById('status').className='s-red';document.getElementById('status').textContent='🔴 Disconnected'};
+socket.onclose=()=>{document.getElementById('status').className='s-red';document.getElementById('status').textContent='🔴 Disconnected'};
+}
+
+// Update countdown
+function updateCountdown(epoch){
+if(countdownInterval){
+clearInterval(countdownInterval);
+countdownInterval=null;
+}
+const next=epoch+gran;
+const cd=document.getElementById('countdown');
+countdownInterval=setInterval(()=>{
+const now=Math.floor(Date.now()/1000);
+const left=next-now;
+if(left>0){
+const m=Math.floor(left/60);
+const s=left%60;
+cd.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}else{cd.textContent='00:00'}
+},1000);
+}
+
+// Export CSV
+function exportCSV(){
+if(data.length===0){alert('No data');return}
+let csv='Time,Open,High,Low,Close\n';
+data.forEach(c=>{
+const dt=new Date(c.time*1000).toISOString();
+csv+=`${dt},${c.open},${c.high},${c.low},${c.close}\n`;
+});
+const blob=new Blob([csv],{type:'text/csv'});
+const url=URL.createObjectURL(blob);
+const a=document.createElement('a');
+a.href=url;
+a.download=`${sym}_${gran}s.csv`;
+a.click();
+}
+
+// Export XLSX
+function exportXLSX(){
+if(data.length===0){alert('No data');return}
+const rows=[['Time','Open','High','Low','Close']];
+data.forEach(c=>{
+const dt=new Date(c.time*1000).toISOString();
+rows.push([dt,c.open,c.high,c.low,c.close]);
+});
+const ws=XLSX.utils.aoa_to_sheet(rows);
+const wb=XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(wb,ws,'Data');
+XLSX.writeFile(wb,`${sym}_${gran}s.xlsx`);
+}
+
+// Run backtest
+function runBacktest(){
+if(data.length===0){alert('Load data first');return}
+const slP=parseFloat(document.getElementById('slP').value)||null;
+const tpP=parseFloat(document.getElementById('tpP').value)||null;
+const hold=parseInt(document.getElementById('hold').value)||5;
+if(!slP&&!tpP){alert('Enter SL% or TP%');return}
+markers=[];
+let wins=0,losses=0,totalPnL=0;
+for(let i=50;i<data.length-hold;i++){
+const sma20=data.slice(Math.max(0,i-19),i+1).reduce((a,b)=>a+b.close,0)/Math.min(20,i+1);
+const sma50=data.slice(Math.max(0,i-49),i+1).reduce((a,b)=>a+b.close,0)/Math.min(50,i+1);
+const prevSma20=data.slice(Math.max(0,i-20),i).reduce((a,b)=>a+b.close,0)/Math.min(20,i);
+const prevSma50=data.slice(Math.max(0,i-50),i).reduce((a,b)=>a+b.close,0)/Math.min(50,i);
+let side=null;
+if(sma20>sma50&&prevSma20<=prevSma50)side='buy';
+else if(sma20<sma50&&prevSma20>=prevSma50)side='sell';
+if(!side)continue;
+const entry=data[i].close;
+let exit=null,outcome=null;
+for(let j=i+1;j<=Math.min(i+hold,data.length-1);j++){
+const c=data[j];
+if(side==='buy'){
+if(slP&&((entry-c.low)/entry*100)>=slP){exit=entry*(1-slP/100);outcome='loss';break}
+if(tpP&&((c.high-entry)/entry*100)>=tpP){exit=entry*(1+tpP/100);outcome='win';break}
+}else{
+if(slP&&((c.high-entry)/entry*100)>=slP){exit=entry*(1+slP/100);outcome='loss';break}
+if(tpP&&((entry-c.low)/entry*100)>=tpP){exit=entry*(1-tpP/100);outcome='win';break}
+}
+if(j===Math.min(i+hold,data.length-1)){exit=c.close;outcome='hold'}
+}
+if(!exit)continue;
+const pnl=side==='buy'?(exit-entry)/entry*100:(entry-exit)/entry*100;
+totalPnL+=pnl;
+if(outcome==='win')wins++;else if(outcome==='loss')losses++;
+markers.push({time:data[i].time,position:side==='buy'?'belowBar':'aboveBar',color:outcome==='win'?'#0f0':outcome==='loss'?'#f33':'#ff0',shape:side==='buy'?'arrowUp':'arrowDown',text:outcome==='win'?'W':outcome==='loss'?'L':'H'});
+}
+series.setMarkers(markers);
+const total=wins+losses;
+const winRate=total>0?(wins/total*100).toFixed(1):0;
+document.getElementById('results').innerHTML=`<strong>Backtest Results</strong><br>Trades: ${total}<br>Wins: ${wins} | Losses: ${losses}<br>Win Rate: ${winRate}%<br>Total P&L: ${totalPnL.toFixed(2)}%`;
+}
+}
+</script>
+
+<!-- ULTRA DATA CAPTURE - universal hook to expose chart data to ULTRA -->
+<script>
+(function(){
+  if(window.__ULTRA_DATA_HOOK) return; window.__ULTRA_DATA_HOOK = true;
+  function tryExpose(arr){
+    try{
+      if(!arr || !Array.isArray(arr) || arr.length<2) return false;
+      if(!arr[0] || typeof arr[0] !== 'object') return false;
+      if(('time' in arr[0]) && ('open' in arr[0]) && ('high' in arr[0]) && ('low' in arr[0]) && ('close' in arr[0])){
+        window.chartDataArray = arr;
+        window.ultraDataReady = true;
+        return true;
+      }
+    }catch(e){}
+    return false;
+  }
+  var tries = 0, maxTries = 600;
+  var poll = setInterval(function(){
+    tries++;
+    try{
+      var candidates = [
+        window.chartDataArray,
+        window.data,
+        window.priceData,
+        window.ohlc,
+        window.candles,
+        window.chartSeriesData,
+        window.priceList,
+        window.chartData,
+        window.seriesData,
+        window.seriesPoints,
+        window.windowData
+      ];
+      for(var i=0;i<candidates.length;i++){
+        if(tryExpose(candidates[i])){ clearInterval(poll); return; }
+      }
+      if(window.series && typeof window.series.getData === 'function'){
+        try{ var sd = window.series.getData(); if(tryExpose(sd)){ clearInterval(poll); return; } }catch(e){}
+      }
+      var names = Object.keys(window);
+      for(var j=0;j<names.length && j<200;j++){
+        var n = names[j];
+        if(/data|candles|series|chart/i.test(n) && n.length<30){
+          try{ var val = window[n]; if(tryExpose(val)){ clearInterval(poll); return; } }catch(e){}
+        }
+      }
+    }catch(e){}
+    if(tries>maxTries){ clearInterval(poll); window.ultraDataReady = false; return; }
+  },200);
+  window.__ultra_hook_tryExpose = tryExpose;
+  // Try to monkeypatch any existing global series.setData to capture direct calls
+  setTimeout(function(){
+    try{
+      if(window.series && window.series.setData){
+        var orig = window.series.setData;
+        window.series.setData = function(d){ try{ tryExpose(d); }catch(e){}; return orig.apply(this, arguments); };
+      }
+    }catch(e){}
+  },500);
+})();
+</script>
+<!-- END ULTRA DATA CAPTURE -->
+<!-- BEGIN: ULTRA PRO MASTER (Inserted) -->
+<div id="ai-ultra-final" style="padding:12px;background:#040704;border-top:2px solid #222;color:#9efca0;">
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <button id="ultraRunFinal" style="padding:8px;border-radius:6px;background:#000;border:1px solid #333;color:#9efca0">Run ULTRA Analysis</button>
+    <button id="ultraExportFinal" style="padding:8px;border-radius:6px;background:#000;border:1px solid #333;color:#9efca0">Export ULTRA CSV</button>
+    <button id="ultraBacktestFinal" style="padding:8px;border-radius:6px;background:#000;border:1px solid #333;color:#9efca0">Backtest AI Signals</button>
+    <button id="ultraPreviewFinal" style="padding:8px;border-radius:6px;background:#000;border:1px solid #333;color:#9efca0">Preview Sample Row</button>
+    <label style="color:#7efc8a">Rows:</label>
+    <select id="ultraRowsFinal" style="padding:6px;background:#000;color:#fff">
+      <option value="5000">5K</option>
+      <option value="10000" selected>10K</option>
+      <option value="20000">20K</option>
+      <option value="all">All</option>
+    </select>
+    <label style="color:#7efc8a">Overlays:</label><button id="toggleOverlays" style="padding:6px;border-radius:6px;background:#000;border:1px solid #333;color:#9efca0">Show</button>
+    <label style="color:#7efc8a">Deep SMC:</label><button id="toggleDeepSMC" style="padding:6px;border-radius:6px;background:#000;border:1px solid #333;color:#9efca0">Enable</button>
+    <span id="ultraStatusFinal" style="margin-left:auto;color:#9efca0">ULTRA Ready - Click Run Analysis</span>
+  </div>
+  <div id="ultraPreviewBoxFinal" style="margin-top:10px;display:none;background:#020402;padding:10px;border-radius:6px;border:1px solid #222;max-height:260px;overflow:auto;font-size:13px"></div>
+  <div id="ultraResultsFinal" style="margin-top:8px;color:#9efca0;font-size:13px"></div>
+</div>
+
+<script>
+(function(){
+  if(window.__ULTRA_PRO_MASTER_INJECTED) return; window.__ULTRA_PRO_MASTER_INJECTED = true;
+  function q(id){return document.getElementById(id);}
+  function round(v,dp=6){ if(v===null||v===undefined||isNaN(v)) return null; return Math.round(v*Math.pow(10,dp))/Math.pow(10,dp); }
+  function toISO(ts){ return (new Date(ts*1000)).toISOString(); }
+  function safeDiv(a,b){ return (b===0||b===null||b===undefined)?0:(a/b); }
+  function emaArr(arr, period, selector='close'){ const out=new Array(arr.length).fill(null); if(arr.length===0) return out; const k=2/(period+1); out[0]=arr[0][selector]||0; for(let i=1;i<arr.length;i++){ const v=arr[i][selector]||0; out[i] = (v - out[i-1])*k + out[i-1]; } return out; }
+  function smaArr(arr, period, selector='close'){ const out=new Array(arr.length).fill(null); let sum=0; for(let i=0;i<arr.length;i++){ const v=arr[i][selector]||0; sum+=v; if(i>=period) sum -= arr[i-period][selector]||0; if(i>=period-1) out[i]=sum/period; } return out; }
+  function rsiArr(arr, period=14){ const out=new Array(arr.length).fill(null); let gain=0, loss=0; for(let i=1;i<arr.length;i++){ const ch=arr[i].close - arr[i-1].close; const g=Math.max(0,ch), l=Math.max(0,-ch); if(i<=period){ gain+=g; loss+=l; if(i===period) out[i]=100-(100/(1+(gain/period)/(loss/period||1e-9))); } else { gain=(gain*(period-1)+g)/period; loss=(loss*(period-1)+l)/period; const rs=gain/(loss||1e-9); out[i]=100-(100/(1+rs)); } } return out; }
+  function atrArr(arr, period=14){ const out=new Array(arr.length).fill(null); if(arr.length<2) return out; let prevClose=arr[0].close; const trs=[]; for(let i=1;i<arr.length;i++){ const tr=Math.max(arr[i].high-arr[i].low, Math.abs(arr[i].high-prevClose), Math.abs(arr[i].low-prevClose)); trs.push(tr); prevClose=arr[i].close; } let atr=0; for(let i=0;i<trs.length;i++){ if(i<period){ atr+=trs[i]; if(i===period-1){ atr/=period; out[i+1]=atr; } } else { atr = ((atr*(period-1)) + trs[i]) / period; out[i+1]=atr; } } return out; }
+  function macdArr(arr, fast=12, slow=26, signal=9){ const f=emaArr(arr,fast), s=emaArr(arr,slow); const macd=f.map((v,i)=> (v||0)-(s[i]||0)); const macdData=macd.map(v=>({close:v||0})); const sig=emaArr(macdData,signal,'close'); const hist=macd.map((v,i)=> v - (sig[i]||0)); return {macd,sig,hist}; }
+  function vwapArr(arr){ const out=new Array(arr.length).fill(null); let cumPV=0,cumV=0; for(let i=0;i<arr.length;i++){ const tp=(arr[i].high+arr[i].low+arr[i].close)/3; const vol=arr[i].volume||0; cumPV+=tp*vol; cumV+=vol; out[i]=cumV?cumPV/cumV:null;} return out; }
+  function obvArr(arr){ const out=new Array(arr.length).fill(0); let obv=0; for(let i=1;i<arr.length;i++){ if(!arr[i].volume) out[i]=obv; else { if(arr[i].close>arr[i-1].close) obv+=arr[i].volume; else if(arr[i].close<arr[i-1].close) obv-=arr[i].volume; out[i]=obv; } } return out; }
+  function swingHL(arr, look=3){ const high=new Array(arr.length).fill(0), low=new Array(arr.length).fill(0); for(let i=look;i<arr.length-look;i++){ let isH=true,isL=true; for(let k=1;k<=look;k++){ if(arr[i].high<=arr[i-k].high||arr[i].high<=arr[i+k].high) isH=false; if(arr[i].low>=arr[i-k].low||arr[i].low>=arr[i+k].low) isL=false; } if(isH) high[i]=1; if(isL) low[i]=1; } return {high,low}; }
+  function fvgAndOrderBlocks(arr){ const fvgU=new Array(arr.length).fill(null), fvgL=new Array(arr.length).fill(null); const obHigh=new Array(arr.length).fill(null), obLow=new Array(arr.length).fill(null), obType=new Array(arr.length).fill(null); for(let i=2;i<arr.length;i++){ const c1=arr[i-2], c2=arr[i-1]; if(c1.high < c2.low){ fvgL[i]=c1.high; fvgU[i]=c2.low; } if(c1.low > c2.high){ fvgL[i]=c2.high; fvgU[i]=c1.low; } const body=Math.abs(c2.close-c2.open), range=c2.high-c2.low; if(body > range*0.6){ obHigh[i]=c2.high; obLow[i]=c2.low; obType[i]=c2.close>c2.open?'bull':'bear'; } } return {fvgU,fvgL,obHigh,obLow,obType}; }
+  function equalHighLow(arr,tol=0.00005){ const eqH=new Array(arr.length).fill(0), eqL=new Array(arr.length).fill(0); for(let i=1;i<arr.length;i++){ if(Math.abs(arr[i].high - arr[i-1].high) <= tol) eqH[i]=1; if(Math.abs(arr[i].low - arr[i-1].low) <= tol) eqL[i]=1; } return {eqH,eqL}; }
+  function buildHeaders(){ return ['time','iso_time','open','high','low','close','volume','ema_20','ema_50','ema_200','sma50','sma200','rsi','macd_line','macd_signal','macd_hist','atr','bb_upper','bb_middle','bb_lower','vwap','obv','swing_high','swing_low','bos','choch','order_block_high','order_block_low','order_block_type','fvg_upper','fvg_lower','premium_zone','discount_zone','vol_ma','vol_spike','buy_volume','sell_volume','imbalance_ratio','rel_volume','htf_trend','equal_high','equal_low','breaker_block','mitigation_block','displacement','structure_score','momentum_score','volume_score','composite_confidence','ai_signal','ai_entry','ai_sl','ai_tp1','ai_tp2','ai_rr','ai_confidence','bt_outcome','bt_exit_time','bt_pnl_percent','session_name','time_of_day','weekday']; }
+  function computeUltra(fullData){
+    if(!Array.isArray(fullData) || fullData.length===0) return;
+    const n=fullData.length;
+    const ema20=emaArr(fullData,20), ema50=emaArr(fullData,50), ema200=emaArr(fullData,200);
+    const sma50=smaArr(fullData,50), sma200=smaArr(fullData,200);
+    const rsi=rsiArr(fullData,14), macd=macdArr(fullData), atr=atrArr(fullData,14);
+    const psar = []; const st = []; const vwap = vwapArr(fullData); const obv = obvArr(fullData);
+    const swings = swingHL(fullData,3); const fvgOb = fvgAndOrderBlocks(fullData); const equal = equalHighLow(fullData);
+    const closes = fullData.map(c=>c.close); const std20 = (function(){ const out=new Array(n).fill(null); for(let i=19;i<n;i++){ const slice = closes.slice(i-19,i+1); const mean = slice.reduce((a,b)=>a+b,0)/20; const s = Math.sqrt(slice.reduce((a,b)=>a+(b-mean)*(b-mean),0)/20); out[i]=s; } return out; })();
+    const volArr = fullData.map(c=>c.volume||0); const volMa = smaArr(fullData.map((c,i)=>({close:volArr[i]})),20,'close');
+    const relVol = volArr.map((v,i)=> volMa[i]? v/volMa[i]:1); const buyVol = fullData.map((c,i)=> c.close>c.open? (c.volume||0):0); const sellVol = fullData.map((c,i)=> c.close<c.open? (c.volume||0):0);
+    const detectedGran = (window.gran||window.tf||60); const htfStep = (typeof window.ULTRA_PRO_HTF === 'function')? window.ULTRA_PRO_HTF(detectedGran) : 5;
+    for(let i=0;i<n;i++){
+      const c=fullData[i]; const ai={};
+      ai.ema_20=round(ema20[i]); ai.ema_50=round(ema50[i]); ai.ema_200=round(ema200[i]); ai.sma50=round(sma50[i]); ai.sma200=round(sma200[i]);
+      ai.rsi=round(rsi[i]); ai.macd_line=round(macd.macd[i]); ai.macd_signal=round(macd.sig[i]); ai.macd_hist=round(macd.hist[i]);
+      ai.atr=round(atr[i]); ai.bb_upper = std20[i]? round(sma50[i] + 2*std20[i]) : null; ai.bb_middle=round(sma50[i]); ai.bb_lower = std20[i]? round(sma50[i] - 2*std20[i]) : null;
+      ai.vwap=round(vwap[i]); ai.obv=round(obv[i]);
+      ai.swing_high = swings.high[i]; ai.swing_low = swings.low[i]; ai.bos = (i>2 && fullData[i].high>fullData[i-1].high && fullData[i-1].high>fullData[i-2].high)?1:0; ai.choch=(i>2 && ((fullData[i].high>fullData[i-1].high && fullData[i].low < fullData[i-1].low)))?1:0;
+      ai.order_block_high = fvgOb.obHigh[i]; ai.order_block_low = fvgOb.obLow[i]; ai.order_block_type = fvgOb.obType[i];
+      ai.fvg_upper = round(fvgOb.fvgU[i]); ai.fvg_lower = round(fvgOb.fvgL[i]);
+      ai.premium_zone = (ai.vwap && c.close > ai.vwap)?1:0; ai.discount_zone = (ai.vwap && c.close < ai.vwap)?1:0;
+      ai.vol_ma = round(volMa[i]||0); ai.vol_spike = (relVol[i]>1.8)?1:0; ai.buy_volume = buyVol[i]||0; ai.sell_volume = sellVol[i]||0; ai.imbalance_ratio = round(safeDiv(ai.buy_volume, (ai.sell_volume||1))); ai.rel_volume = round(relVol[i]||1);
+      ai.equal_high = equal.eqH[i]||0; ai.equal_low = equal.eqL[i]||0;
+      ai.breaker_block = 0; ai.mitigation_block = 0;
+      ai.displacement = round(Math.abs(c.close - c.open) / (ai.atr || 1));
+      let sscore=0; if(ai.bos) sscore+=2; if(ai.choch) sscore+=1.5; if(ai.order_block_type) sscore+=1; if(ai.fvg_upper||ai.fvg_lower) sscore+=1; ai.structure_score = round(sscore);
+      let mscore=0; if(ai.macd_hist && ai.macd_hist>0) mscore+=1; if(ai.rsi && ai.rsi>50) mscore+=1; ai.momentum_score = round(mscore);
+      ai.volume_score = round(ai.vol_spike?2: (ai.rel_volume>1.2?1:0));
+      let composite = safeDiv(sscore*0.4 + mscore*0.3 + ai.volume_score*0.3, 4.0); composite = Math.min(1, composite); ai.composite_confidence = round(composite,3);
+      ai.ai_signal='NO_SIGNAL'; ai.ai_entry=null; ai.ai_sl=null; ai.ai_tp1=null; ai.ai_tp2=null; ai.ai_rr=null; ai.ai_confidence=null;
+      const bullishCond = (ai.bos===1 || ai.choch===1) && (ai.order_block_type==='bull' || ai.fvg_lower) && (ai.composite_confidence>=0.45);
+      const bearishCond = (ai.bos===1 || ai.choch===1) && (ai.order_block_type==='bear' || ai.fvg_upper) && (ai.composite_confidence>=0.45);
+      function findRecentSwingLow(idx){ for(let k=idx;k>Math.max(0,idx-30);k--) if(swings.low[k]) return fullData[k].low; return fullData[Math.max(0,idx-3)].low; }
+      function findRecentSwingHigh(idx){ for(let k=idx;k>Math.max(0,idx-30);k--) if(swings.high[k]) return fullData[k].high; return fullData[Math.max(0,idx-3)].high; }
+      if(bullishCond){ ai.ai_signal='BUY'; ai.ai_entry=round(c.close); const slBase=findRecentSwingLow(i) || (c.close - (ai.atr||0)*1.5); ai.ai_sl=round(slBase*0.999); ai.ai_tp1 = ai.fvg_upper || ai.order_block_high || round(ai.vwap + (c.close - ai.ai_sl)*1.5); ai.ai_tp2 = round(ai.ai_entry + (ai.ai_entry - ai.ai_sl)*5); ai.ai_rr = round(safeDiv(ai.ai_tp1 - ai.ai_entry, ai.ai_entry - ai.ai_sl)); ai.ai_confidence = round(ai.composite_confidence,3); }
+      else if(bearishCond){ ai.ai_signal='SELL'; ai.ai_entry=round(c.close); const slBase=findRecentSwingHigh(i) || (c.close + (ai.atr||0)*1.5); ai.ai_sl=round(slBase*1.001); ai.ai_tp1 = ai.fvg_lower || ai.order_block_low || round(ai.vwap - (ai.ai_sl - c.close)*1.5); ai.ai_tp2 = round(ai.ai_entry - (ai.ai_sl - ai.ai_entry)*5); ai.ai_rr = round(safeDiv(ai.ai_entry - ai.ai_tp1, ai.ai_sl - ai.ai_entry)); ai.ai_confidence = round(ai.composite_confidence,3); }
+      ai.bt_outcome = null; ai.bt_exit_time = null; ai.bt_pnl_percent = null;
+      ai.session_name = ((new Date(c.time*1000)).getUTCHours()>=8 && (new Date(c.time*1000)).getUTCHours()<16)?'London': ((new Date(c.time*1000)).getUTCHours()<8)?'Asia':'NY';
+      ai.time_of_day = (new Date(c.time*1000)).toISOString().split('T')[1].split('.')[0];
+      ai.weekday = (new Date(c.time*1000)).getUTCDay();
+      c.aiUltraFinal = ai;
+    }
+    return fullData;
+  }
+  function exportUltraCSV(fullData){ if(!fullData || fullData.length===0){ alert('No data'); return; } const headers = buildHeaders(); const rows=[headers.join(',')]; for(let i=0;i<fullData.length;i++){ const c=fullData[i]; const ai=c.aiUltraFinal||{}; const base=[c.time||'', toISO(c.time)||'', c.open, c.high, c.low, c.close, c.volume||'']; const rest = headers.slice(7).map(h => { const v = ai[h]!==undefined && ai[h]!==null ? ai[h] : ''; return (typeof v === 'string' && v.includes(','))? '"' + v.replace(/"/g,'""') + '"' : v; }); rows.push([...base, ...rest].join(',')); } const blob=new Blob([rows.join('\n')], {type:'text/csv'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download = (window.sym||'symbol') + '_' + (window.gran||'tf') + '_ULTRA_MASTER.csv'; a.click(); URL.revokeObjectURL(url); }
+  function backtestAI(fullData, maxHold=200){ if(!fullData || fullData.length===0) return {trades:0,wins:0,losses:0,winRate:0,totalPnL:0,details:[]}; let trades=0,wins=0,losses=0,totalPnL=0,details=[]; for(let i=0;i<fullData.length;i++){ const ai=fullData[i].aiUltraFinal; if(!ai || !ai.ai_signal || ai.ai_signal==='NO_SIGNAL') continue; trades++; const entry = ai.ai_entry || fullData[i].close; const sl = ai.ai_sl || (entry - (ai.atr||0.001)); const tp = ai.ai_tp1 || (entry + (ai.atr||0.001)); let outcome='hold', exitPrice = fullData[Math.min(fullData.length-1,i+maxHold)].close; for(let j=i+1;j<Math.min(fullData.length, i+maxHold); j++){ const c=fullData[j]; if(ai.ai_signal==='BUY'){ if(c.low <= sl){ outcome='loss'; exitPrice=sl; break } if(c.high >= tp){ outcome='win'; exitPrice=tp; break } } else if(ai.ai_signal==='SELL'){ if(c.high >= sl){ outcome='loss'; exitPrice=sl; break } if(c.low <= tp){ outcome='win'; exitPrice=tp; break } } } const pnl = ai.ai_signal==='BUY'? (exitPrice - entry)/entry*100 : (entry - exitPrice)/entry*100; if(outcome==='win') wins++; else if(outcome==='loss') losses++; totalPnL += pnl; details.push({time:fullData[i].time, side:ai.ai_signal, entry, sl, tp, exit:exitPrice, outcome, pnl}); fullData[i].aiUltraFinal.bt_outcome = outcome; fullData[i].aiUltraFinal.bt_exit_time = new Date().toISOString(); fullData[i].aiUltraFinal.bt_pnl_percent = round(pnl,4); } const winRate = trades? round(wins/trades*100,2) : 0; return {trades,wins,losses,winRate,totalPnL: round(totalPnL,4), details}; }
+  window.__ultra_lines = window.__ultra_lines || []; var ULTRA_PRO = { overlaysShown:false, deepSMCEnabled:false, htfMultiplierForGran:function(g){ if(!g) return 5; if(g<=60) return 5; if(g<=300) return 12; if(g<=900) return 4; if(g<=3600) return 4; return 1; },
+    drawPreviewLines:function(row){ try{ if(window.__ultra_lines && window.__ultra_lines.length){ window.__ultra_lines.forEach(l=>{ try{ series.removePriceLine(l) }catch(e){} }); } window.__ultra_lines=[]; if(!row||!row.aiUltraFinal) return; const ai=row.aiUltraFinal; if(ai.ai_entry) window.__ultra_lines.push(series.createPriceLine({price:ai.ai_entry, color: 'rgba(0,255,0,0.9)',lineWidth:2,lineStyle:0})); if(ai.ai_sl) window.__ultra_lines.push(series.createPriceLine({price:ai.ai_sl, color: 'rgba(255,0,0,0.9)',lineWidth:2,lineStyle:2})); if(ai.ai_tp1) window.__ultra_lines.push(series.createPriceLine({price:ai.ai_tp1, color: 'rgba(0,200,255,0.9)',lineWidth:2,lineStyle:0})); }catch(e){console.warn('ULTRA: drawPreviewLines error',e);} },
+    drawOrderBlocksMarkers:function(fullData,fvgOb,maxMarkers=200){ try{ if(!ULTRA_PRO.overlaysShown) return; const m=[]; for(let i=0;i<fullData.length;i++){ if(fvgOb.obHigh && fvgOb.obHigh[i] && fvgOb.obLow && fvgOb.obLow[i]){ m.push({time: fullData[i].time, position: 'aboveBar', color: '#ffaa00', shape: 'circle', text: 'FVG'}); } else if(fvgOb.obHigh && fvgOb.obHigh[i]){ m.push({time: fullData[i].time, position: 'aboveBar', color: '#0ff', shape: 'square', text: 'OB'}); } else if(fvgOb.obLow && fvgOb.obLow[i]){ m.push({time: fullData[i].time, position: 'belowBar', color: '#0f0', shape: 'square', text: 'OB'}); } if(m.length>=maxMarkers) break; } series.setMarkers(m); }catch(e){console.warn('ULTRA: drawOrderBlocksMarkers error',e);} } };
+  document.addEventListener('click', function(e){ if(e.target && e.target.id==='toggleOverlays'){ ULTRA_PRO.overlaysShown = !ULTRA_PRO.overlaysShown; e.target.textContent = ULTRA_PRO.overlaysShown ? 'Hide' : 'Show'; const fd = window.chartDataArray || window.data || window.dataSource; if(fd && fd.length>0){ const subset = fd.slice(Math.max(0, fd.length - 2000)); const computed = computeUltra(subset); ULTRA_PRO.drawOrderBlocksMarkers(subset, {obHigh:subset.map(x=>x.aiUltraFinal?x.aiUltraFinal.order_block_high:null), obLow:subset.map(x=>x.aiUltraFinal?x.aiUltraFinal.order_block_low:null)}); } } else if(e.target && e.target.id==='toggleDeepSMC'){ ULTRA_PRO.deepSMCEnabled = !ULTRA_PRO.deepSMCEnabled; e.target.textContent = ULTRA_PRO.deepSMCEnabled ? 'Disable' : 'Enable'; } });
+  function exposeData(){ try{ if(window.chartDataArray && Array.isArray(window.chartDataArray)) return window.chartDataArray; if(typeof data !== 'undefined' && Array.isArray(data)){ window.chartDataArray = data; return data;} if(window.data && Array.isArray(window.data)){ window.chartDataArray = window.data; return window.data;} }catch(e){} return null; }
+  function waitForData(timeoutMs, intervalMs){ return new Promise(function(resolve,reject){ const start=Date.now(); const id=setInterval(function(){ const d=exposeData(); if(d && d.length>0){ clearInterval(id); resolve(d); } if(Date.now()-start>timeoutMs){ clearInterval(id); reject(new Error('Timeout waiting for chart data')); } }, intervalMs||250); }); }
+  waitForData(30000,250).then(function(fullData){ const run=q('ultraRunFinal'), exp=q('ultraExportFinal'), btest=q('ultraBacktestFinal'), prev=q('ultraPreviewFinal'); const rowsSel=q('ultraRowsFinal'), status=q('ultraStatusFinal'), previewBox=q('ultraPreviewBoxFinal'), results=q('ultraResultsFinal'); function computeAndAttach(){ const sel=rowsSel.value; const subset=(sel==='all')? fullData : fullData.slice(Math.max(0, fullData.length - parseInt(sel))); computeUltra(subset); if(sel !== 'all'){ const start = Math.max(0, fullData.length - subset.length); for(let i=0;i<subset.length;i++) fullData[start+i].aiUltraFinal = subset[i].aiUltraFinal; } status.textContent = 'ULTRA Master: Analysis Complete'; const last=subset[subset.length-1]; ULTRA_PRO.drawPreviewLines(last); ULTRA_PRO.drawOrderBlocksMarkers(subset,{obHigh:subset.map(x=>x.aiUltraFinal?x.aiUltraFinal.order_block_high:null), obLow:subset.map(x=>x.aiUltraFinal?x.aiUltraFinal.order_block_low:null)}); alert('ULTRA Master analysis finished.'); } run.addEventListener('click', function(){ status.textContent='Running ULTRA...'; setTimeout(computeAndAttach,50); }); exp.addEventListener('click', function(){ const sel=rowsSel.value; const subset=(sel==='all')? fullData : fullData.slice(Math.max(0, fullData.length - parseInt(sel))); if(!subset.some(x=>x.aiUltraFinal)) computeUltra(subset); exportUltraCSV(subset); status.textContent='CSV exported'; }); btest.addEventListener('click', function(){ const sel=rowsSel.value; const subset=(sel==='all')? fullData : fullData.slice(Math.max(0, fullData.length - parseInt(sel))); if(!subset.some(x=>x.aiUltraFinal)) computeUltra(subset); const res=backtestAI(subset,200); results.innerHTML = '<strong>Backtest</strong> Trades: '+res.trades+' | Wins: '+res.wins+' | Losses: '+res.losses+' | WinRate: '+res.winRate+'% | TotalPnL%: '+res.totalPnL; status.textContent='Backtest complete'; }); prev.addEventListener('click', function(){ const sel=rowsSel.value; const subset=(sel==='all')? fullData : fullData.slice(Math.max(0, fullData.length - parseInt(sel))); if(!subset.some(x=>x.aiUltraFinal)) computeUltra(subset); const last=subset[subset.length-1]; previewBox.style.display='block'; previewBox.innerHTML = '<pre style=\"white-space:pre-wrap\">'+JSON.stringify(last.aiUltraFinal,null,2)+'</pre>'; status.textContent='Preview ready'; ULTRA_PRO.drawPreviewLines(last); }); status.textContent='ULTRA Master: Ready'; }).catch(function(err){ console.warn('ULTRA Master: data not found or timeout',err); const status=q('ultraStatusFinal'); if(status) status.textContent='ULTRA Master: No data found'; });
+  setTimeout(function(){ try{ const ui=q('ai-ultra-final'); if(ui){ ui.style.position='relative'; ui.style.zIndex='1000'; ui.style.margin='8px auto 20px auto'; ui.style.maxWidth='1200px'; ui.style.width='calc(100% - 24px)'; if(ui.parentElement!==document.body) document.body.appendChild(ui); } const chartDiv=document.getElementById('chart'); if(chartDiv){ chartDiv.style.marginTop='0'; chartDiv.style.paddingTop='0'; } }catch(e){console.warn('ULTRA layout fixer error',e);} },500);
+})();</script>
+<!-- END: ULTRA PRO MASTER -->
+</body>
+</html>
+ 
