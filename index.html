@@ -118,7 +118,35 @@ let chart,series,socket,data=[],last=null,sym='',gran=60,markers=[],rangeStart=n
 let currentStrategy=null,strategyInterval=null,customStrategyFunc=null,chartReady=false,countdownInterval=null;
 let lastProcessedIndex=-1;
 
-// Technical Indicators
+// Basic Price Action Indicators
+function calculateReturns(data) {
+  const returns = [];
+  for (let i = 0; i < data.length; i++) {
+    if (i === 0) {
+      returns.push(null);
+    } else {
+      returns.push(((data[i].close - data[i - 1].close) / data[i - 1].close) * 100);
+    }
+  }
+  return returns;
+}
+
+function calculateHL(data) {
+  return data.map(d => d.high - d.low);
+}
+
+function calculateOC(data) {
+  return data.map(d => Math.abs(d.open - d.close));
+}
+
+function calculateBodyPct(data) {
+  return data.map(d => {
+    const range = d.high - d.low;
+    return range === 0 ? 0 : (Math.abs(d.open - d.close) / range) * 100;
+  });
+}
+
+// Moving Averages
 function calculateSMA(data, period) {
   const sma = [];
   for (let i = 0; i < data.length; i++) {
@@ -139,7 +167,7 @@ function calculateEMA(data, period) {
   const ema = [];
   const multiplier = 2 / (period + 1);
   let prevEMA = data[0].close;
-  
+
   for (let i = 0; i < data.length; i++) {
     if (i === 0) {
       ema.push(data[i].close);
@@ -152,27 +180,47 @@ function calculateEMA(data, period) {
   return ema;
 }
 
+function calculateWMA(data, period) {
+  const wma = [];
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) {
+      wma.push(null);
+    } else {
+      let weightedSum = 0;
+      let weightSum = 0;
+      for (let j = 0; j < period; j++) {
+        const weight = period - j;
+        weightedSum += data[i - j].close * weight;
+        weightSum += weight;
+      }
+      wma.push(weightedSum / weightSum);
+    }
+  }
+  return wma;
+}
+
+// RSI
 function calculateRSI(data, period = 14) {
   const rsi = [];
   const gains = [];
   const losses = [];
-  
+
   for (let i = 0; i < data.length; i++) {
     if (i === 0) {
       rsi.push(null);
       continue;
     }
-    
+
     const change = data[i].close - data[i - 1].close;
     gains.push(change > 0 ? change : 0);
     losses.push(change < 0 ? Math.abs(change) : 0);
-    
+
     if (i < period) {
       rsi.push(null);
     } else {
       const avgGain = gains.slice(-period).reduce((a, b) => a + b) / period;
       const avgLoss = losses.slice(-period).reduce((a, b) => a + b) / period;
-      
+
       if (avgLoss === 0) {
         rsi.push(100);
       } else {
@@ -184,18 +232,537 @@ function calculateRSI(data, period = 14) {
   return rsi;
 }
 
+// MACD
 function calculateMACD(data, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
   const fastEMA = calculateEMA(data, fastPeriod);
   const slowEMA = calculateEMA(data, slowPeriod);
-  
+
   const macdLine = fastEMA.map((fast, i) => fast - slowEMA[i]);
-  
+
   const macdData = macdLine.map((val, i) => ({ close: val || 0 }));
   const signalLine = calculateEMA(macdData, signalPeriod);
-  
+
   const histogram = macdLine.map((macd, i) => macd - signalLine[i]);
-  
+
   return { macdLine, signalLine, histogram };
+}
+
+// Stochastic Oscillator
+function calculateStochastic(data, period = 14, smoothK = 3, smoothD = 3) {
+  const stochK = [];
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) {
+      stochK.push(null);
+    } else {
+      const slice = data.slice(i - period + 1, i + 1);
+      const highest = Math.max(...slice.map(d => d.high));
+      const lowest = Math.min(...slice.map(d => d.low));
+      const k = lowest === highest ? 50 : ((data[i].close - lowest) / (highest - lowest)) * 100;
+      stochK.push(k);
+    }
+  }
+  
+  const stochKSmooth = [];
+  for (let i = 0; i < stochK.length; i++) {
+    if (i < smoothK - 1 || stochK[i] === null) {
+      stochKSmooth.push(null);
+    } else {
+      let sum = 0;
+      for (let j = 0; j < smoothK; j++) {
+        sum += stochK[i - j];
+      }
+      stochKSmooth.push(sum / smoothK);
+    }
+  }
+  
+  const stochD = [];
+  for (let i = 0; i < stochKSmooth.length; i++) {
+    if (i < smoothD - 1 || stochKSmooth[i] === null) {
+      stochD.push(null);
+    } else {
+      let sum = 0;
+      for (let j = 0; j < smoothD; j++) {
+        sum += stochKSmooth[i - j];
+      }
+      stochD.push(sum / smoothD);
+    }
+  }
+  
+  return { k: stochKSmooth, d: stochD };
+}
+
+// ATR
+function calculateATR(data, period = 14) {
+  const tr = [];
+  for (let i = 0; i < data.length; i++) {
+    if (i === 0) {
+      tr.push(data[i].high - data[i].low);
+    } else {
+      const hl = data[i].high - data[i].low;
+      const hc = Math.abs(data[i].high - data[i - 1].close);
+      const lc = Math.abs(data[i].low - data[i - 1].close);
+      tr.push(Math.max(hl, hc, lc));
+    }
+  }
+  
+  const atr = [];
+  for (let i = 0; i < tr.length; i++) {
+    if (i < period - 1) {
+      atr.push(null);
+    } else if (i === period - 1) {
+      atr.push(tr.slice(0, period).reduce((a, b) => a + b) / period);
+    } else {
+      atr.push((atr[i - 1] * (period - 1) + tr[i]) / period);
+    }
+  }
+  
+  return atr;
+}
+
+// Bollinger Bands
+function calculateBollingerBands(data, period = 20, stdDev = 2) {
+  const sma = calculateSMA(data, period);
+  const upper = [];
+  const lower = [];
+  const bandwidth = [];
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) {
+      upper.push(null);
+      lower.push(null);
+      bandwidth.push(null);
+    } else {
+      const slice = data.slice(i - period + 1, i + 1);
+      const mean = sma[i];
+      const variance = slice.reduce((sum, d) => sum + Math.pow(d.close - mean, 2), 0) / period;
+      const std = Math.sqrt(variance);
+      upper.push(mean + stdDev * std);
+      lower.push(mean - stdDev * std);
+      bandwidth.push((upper[i] - lower[i]) / mean * 100);
+    }
+  }
+  
+  return { upper, middle: sma, lower, bandwidth };
+}
+
+// CCI
+function calculateCCI(data, period = 20) {
+  const cci = [];
+  const typicalPrice = data.map(d => (d.high + d.low + d.close) / 3);
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) {
+      cci.push(null);
+    } else {
+      const slice = typicalPrice.slice(i - period + 1, i + 1);
+      const sma = slice.reduce((a, b) => a + b) / period;
+      const meanDev = slice.reduce((sum, val) => sum + Math.abs(val - sma), 0) / period;
+      cci.push(meanDev === 0 ? 0 : (typicalPrice[i] - sma) / (0.015 * meanDev));
+    }
+  }
+  
+  return cci;
+}
+
+// Williams %R
+function calculateWilliamsR(data, period = 14) {
+  const willR = [];
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) {
+      willR.push(null);
+    } else {
+      const slice = data.slice(i - period + 1, i + 1);
+      const highest = Math.max(...slice.map(d => d.high));
+      const lowest = Math.min(...slice.map(d => d.low));
+      willR.push(lowest === highest ? -50 : ((highest - data[i].close) / (highest - lowest)) * -100);
+    }
+  }
+  
+  return willR;
+}
+
+// ROC (Rate of Change)
+function calculateROC(data, period = 12) {
+  const roc = [];
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i < period) {
+      roc.push(null);
+    } else {
+      roc.push(((data[i].close - data[i - period].close) / data[i - period].close) * 100);
+    }
+  }
+  
+  return roc;
+}
+
+// MFI (Money Flow Index)
+function calculateMFI(data, period = 14) {
+  const mfi = [];
+  const typicalPrice = data.map(d => (d.high + d.low + d.close) / 3);
+  const moneyFlow = typicalPrice.map((tp, i) => tp * (data[i].volume || 1));
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i < period) {
+      mfi.push(null);
+    } else {
+      let posFlow = 0;
+      let negFlow = 0;
+      
+      for (let j = i - period + 1; j <= i; j++) {
+        if (typicalPrice[j] > typicalPrice[j - 1]) {
+          posFlow += moneyFlow[j];
+        } else {
+          negFlow += moneyFlow[j];
+        }
+      }
+      
+      if (negFlow === 0) {
+        mfi.push(100);
+      } else {
+        const mfRatio = posFlow / negFlow;
+        mfi.push(100 - (100 / (1 + mfRatio)));
+      }
+    }
+  }
+  
+  return mfi;
+}
+
+// ADX
+function calculateADX(data, period = 14) {
+  const tr = [];
+  const plusDM = [];
+  const minusDM = [];
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i === 0) {
+      tr.push(data[i].high - data[i].low);
+      plusDM.push(0);
+      minusDM.push(0);
+    } else {
+      const hl = data[i].high - data[i].low;
+      const hc = Math.abs(data[i].high - data[i - 1].close);
+      const lc = Math.abs(data[i].low - data[i - 1].close);
+      tr.push(Math.max(hl, hc, lc));
+      
+      const upMove = data[i].high - data[i - 1].high;
+      const downMove = data[i - 1].low - data[i].low;
+      
+      plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
+      minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
+    }
+  }
+  
+  const atr = calculateATR(data, period);
+  const plusDI = [];
+  const minusDI = [];
+  const dx = [];
+  const adx = [];
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) {
+      plusDI.push(null);
+      minusDI.push(null);
+      dx.push(null);
+      adx.push(null);
+    } else {
+      const smoothPlusDM = plusDM.slice(i - period + 1, i + 1).reduce((a, b) => a + b) / period;
+      const smoothMinusDM = minusDM.slice(i - period + 1, i + 1).reduce((a, b) => a + b) / period;
+      
+      plusDI.push(atr[i] === 0 ? 0 : (smoothPlusDM / atr[i]) * 100);
+      minusDI.push(atr[i] === 0 ? 0 : (smoothMinusDM / atr[i]) * 100);
+      
+      const diSum = plusDI[i] + minusDI[i];
+      dx.push(diSum === 0 ? 0 : (Math.abs(plusDI[i] - minusDI[i]) / diSum) * 100);
+      
+      if (i < period * 2 - 2) {
+        adx.push(null);
+      } else if (i === period * 2 - 2) {
+        adx.push(dx.slice(period - 1, period * 2 - 1).reduce((a, b) => a + b) / period);
+      } else {
+        adx.push((adx[i - 1] * (period - 1) + dx[i]) / period);
+      }
+    }
+  }
+  
+  return { adx, plusDI, minusDI };
+}
+
+// OBV (On Balance Volume)
+function calculateOBV(data) {
+  const obv = [];
+  let cumulative = 0;
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i === 0) {
+      obv.push(data[i].volume || 0);
+      cumulative = data[i].volume || 0;
+    } else {
+      if (data[i].close > data[i - 1].close) {
+        cumulative += (data[i].volume || 0);
+      } else if (data[i].close < data[i - 1].close) {
+        cumulative -= (data[i].volume || 0);
+      }
+      obv.push(cumulative);
+    }
+  }
+  
+  return obv;
+}
+
+// VWAP
+function calculateVWAP(data) {
+  const vwap = [];
+  let cumulativePV = 0;
+  let cumulativeV = 0;
+  
+  for (let i = 0; i < data.length; i++) {
+    const typical = (data[i].high + data[i].low + data[i].close) / 3;
+    const volume = data[i].volume || 1;
+    cumulativePV += typical * volume;
+    cumulativeV += volume;
+    vwap.push(cumulativeV === 0 ? typical : cumulativePV / cumulativeV);
+  }
+  
+  return vwap;
+}
+
+// Standard Deviation
+function calculateStdDev(data, period = 20) {
+  const stdDev = [];
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) {
+      stdDev.push(null);
+    } else {
+      const slice = data.slice(i - period + 1, i + 1).map(d => d.close);
+      const mean = slice.reduce((a, b) => a + b) / period;
+      const variance = slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period;
+      stdDev.push(Math.sqrt(variance));
+    }
+  }
+  
+  return stdDev;
+}
+
+// Pivot Points
+function calculatePivotPoints(data) {
+  const pivots = [];
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i === 0) {
+      pivots.push({
+        pp: null, r1: null, r2: null, r3: null,
+        s1: null, s2: null, s3: null
+      });
+    } else {
+      const pp = (data[i - 1].high + data[i - 1].low + data[i - 1].close) / 3;
+      const r1 = 2 * pp - data[i - 1].low;
+      const s1 = 2 * pp - data[i - 1].high;
+      const r2 = pp + (data[i - 1].high - data[i - 1].low);
+      const s2 = pp - (data[i - 1].high - data[i - 1].low);
+      const r3 = data[i - 1].high + 2 * (pp - data[i - 1].low);
+      const s3 = data[i - 1].low - 2 * (data[i - 1].high - pp);
+      
+      pivots.push({ pp, r1, r2, r3, s1, s2, s3 });
+    }
+  }
+  
+  return pivots;
+}
+
+// Ichimoku Cloud
+function calculateIchimoku(data, tenkan = 9, kijun = 26, senkouB = 52, displacement = 26) {
+  const ichimoku = [];
+  
+  const getHighLow = (data, start, end) => {
+    if (start < 0) return { high: null, low: null };
+    const slice = data.slice(start, end + 1);
+    return {
+      high: Math.max(...slice.map(d => d.high)),
+      low: Math.min(...slice.map(d => d.low))
+    };
+  };
+  
+  for (let i = 0; i < data.length; i++) {
+    const tenkanHL = getHighLow(data, i - tenkan + 1, i);
+    const kijunHL = getHighLow(data, i - kijun + 1, i);
+    const senkouBHL = getHighLow(data, i - senkouB + 1, i);
+    
+    const tenkanSen = tenkanHL.high !== null ? (tenkanHL.high + tenkanHL.low) / 2 : null;
+    const kijunSen = kijunHL.high !== null ? (kijunHL.high + kijunHL.low) / 2 : null;
+    const senkouSpanB = senkouBHL.high !== null ? (senkouBHL.high + senkouBHL.low) / 2 : null;
+    const senkouSpanA = tenkanSen !== null && kijunSen !== null ? (tenkanSen + kijunSen) / 2 : null;
+    const chikouSpan = data[i].close;
+    
+    ichimoku.push({
+      tenkanSen,
+      kijunSen,
+      senkouSpanA,
+      senkouSpanB,
+      chikouSpan
+    });
+  }
+  
+  return ichimoku;
+}
+
+// Keltner Channels
+function calculateKeltnerChannels(data, period = 20, atrPeriod = 10, multiplier = 2) {
+  const ema = calculateEMA(data, period);
+  const atr = calculateATR(data, atrPeriod);
+  
+  const upper = ema.map((e, i) => e !== null && atr[i] !== null ? e + multiplier * atr[i] : null);
+  const lower = ema.map((e, i) => e !== null && atr[i] !== null ? e - multiplier * atr[i] : null);
+  
+  return { upper, middle: ema, lower };
+}
+
+// Parabolic SAR
+function calculateParabolicSAR(data, step = 0.02, max = 0.2) {
+  const sar = [];
+  let isUptrend = true;
+  let af = step;
+  let ep = data[0].high;
+  let sarValue = data[0].low;
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i === 0) {
+      sar.push(sarValue);
+      continue;
+    }
+    
+    sarValue = sarValue + af * (ep - sarValue);
+    
+    if (isUptrend) {
+      if (data[i].low < sarValue) {
+        isUptrend = false;
+        sarValue = ep;
+        ep = data[i].low;
+        af = step;
+      } else {
+        if (data[i].high > ep) {
+          ep = data[i].high;
+          af = Math.min(af + step, max);
+        }
+        sarValue = Math.min(sarValue, data[i - 1].low, i > 1 ? data[i - 2].low : data[i - 1].low);
+      }
+    } else {
+      if (data[i].high > sarValue) {
+        isUptrend = true;
+        sarValue = ep;
+        ep = data[i].high;
+        af = step;
+      } else {
+        if (data[i].low < ep) {
+          ep = data[i].low;
+          af = Math.min(af + step, max);
+        }
+        sarValue = Math.max(sarValue, data[i - 1].high, i > 1 ? data[i - 2].high : data[i - 1].high);
+      }
+    }
+    
+    sar.push(sarValue);
+  }
+  
+  return sar;
+}
+
+// Function to calculate all indicators
+function calculateAllIndicators(data) {
+  console.log('Calculating all indicators...');
+  
+  const indicators = {};
+  
+  indicators.returns = calculateReturns(data);
+  indicators.hl = calculateHL(data);
+  indicators.oc = calculateOC(data);
+  indicators.bodyPct = calculateBodyPct(data);
+  
+  indicators.sma5 = calculateSMA(data, 5);
+  indicators.sma10 = calculateSMA(data, 10);
+  indicators.sma20 = calculateSMA(data, 20);
+  indicators.sma50 = calculateSMA(data, 50);
+  indicators.sma100 = calculateSMA(data, 100);
+  indicators.sma200 = calculateSMA(data, 200);
+  
+  indicators.ema5 = calculateEMA(data, 5);
+  indicators.ema10 = calculateEMA(data, 10);
+  indicators.ema12 = calculateEMA(data, 12);
+  indicators.ema20 = calculateEMA(data, 20);
+  indicators.ema26 = calculateEMA(data, 26);
+  indicators.ema50 = calculateEMA(data, 50);
+  indicators.ema100 = calculateEMA(data, 100);
+  indicators.ema200 = calculateEMA(data, 200);
+  
+  indicators.wma10 = calculateWMA(data, 10);
+  indicators.wma20 = calculateWMA(data, 20);
+  indicators.wma50 = calculateWMA(data, 50);
+  
+  indicators.rsi7 = calculateRSI(data, 7);
+  indicators.rsi14 = calculateRSI(data, 14);
+  indicators.rsi21 = calculateRSI(data, 21);
+  
+  const macd = calculateMACD(data);
+  indicators.macdLine = macd.macdLine;
+  indicators.macdSignal = macd.signalLine;
+  indicators.macdHistogram = macd.histogram;
+  
+  const stoch = calculateStochastic(data);
+  indicators.stochK = stoch.k;
+  indicators.stochD = stoch.d;
+  
+  indicators.atr14 = calculateATR(data, 14);
+  indicators.atr20 = calculateATR(data, 20);
+  
+  const bb = calculateBollingerBands(data);
+  indicators.bbUpper = bb.upper;
+  indicators.bbMiddle = bb.middle;
+  indicators.bbLower = bb.lower;
+  indicators.bbBandwidth = bb.bandwidth;
+  
+  indicators.cci20 = calculateCCI(data, 20);
+  indicators.williamsR14 = calculateWilliamsR(data, 14);
+  indicators.roc12 = calculateROC(data, 12);
+  indicators.mfi14 = calculateMFI(data, 14);
+  
+  const adx = calculateADX(data);
+  indicators.adx14 = adx.adx;
+  indicators.plusDI = adx.plusDI;
+  indicators.minusDI = adx.minusDI;
+  
+  indicators.obv = calculateOBV(data);
+  indicators.vwap = calculateVWAP(data);
+  indicators.stdDev20 = calculateStdDev(data, 20);
+  
+  const pivots = calculatePivotPoints(data);
+  indicators.pivotPoint = pivots.map(p => p.pp);
+  indicators.r1 = pivots.map(p => p.r1);
+  indicators.r2 = pivots.map(p => p.r2);
+  indicators.r3 = pivots.map(p => p.r3);
+  indicators.s1 = pivots.map(p => p.s1);
+  indicators.s2 = pivots.map(p => p.s2);
+  indicators.s3 = pivots.map(p => p.s3);
+  
+  const ichimoku = calculateIchimoku(data);
+  indicators.ichimokuTenkan = ichimoku.map(i => i.tenkanSen);
+  indicators.ichimokuKijun = ichimoku.map(i => i.kijunSen);
+  indicators.ichimokuSenkouA = ichimoku.map(i => i.senkouSpanA);
+  indicators.ichimokuSenkouB = ichimoku.map(i => i.senkouSpanB);
+  indicators.ichimokuChikou = ichimoku.map(i => i.chikouSpan);
+  
+  const keltner = calculateKeltnerChannels(data);
+  indicators.keltnerUpper = keltner.upper;
+  indicators.keltnerMiddle = keltner.middle;
+  indicators.keltnerLower = keltner.lower;
+  
+  indicators.psar = calculateParabolicSAR(data);
+  
+  console.log('All indicators calculated successfully!');
+  return indicators;
 }
 
 // Strategy: Immediate Signal Test (RSI + MA Crossover)
@@ -204,20 +771,18 @@ function immediateSignalStrategy(data) {
   const sma20 = calculateSMA(data, 20);
   const sma50 = calculateSMA(data, 50);
   const rsi = calculateRSI(data, 14);
-  
+
   for (let i = 50; i < data.length; i++) {
     if (sma20[i] && sma50[i] && rsi[i]) {
-      // Buy signal: SMA20 crosses above SMA50 and RSI < 70
       if (sma20[i] > sma50[i] && sma20[i - 1] <= sma50[i - 1] && rsi[i] < 70) {
         signals.push({ time: data[i].time, position: 'belowBar', color: '#0f0', shape: 'arrowUp', text: 'BUY' });
       }
-      // Sell signal: SMA20 crosses below SMA50 and RSI > 30
       else if (sma20[i] < sma50[i] && sma20[i - 1] >= sma50[i - 1] && rsi[i] > 30) {
         signals.push({ time: data[i].time, position: 'aboveBar', color: '#f33', shape: 'arrowDown', text: 'SELL' });
       }
     }
   }
-  
+
   return signals;
 }
 
@@ -228,18 +793,15 @@ function randomStrategy(data) {
   const ema26 = calculateEMA(data, 26);
   const rsi = calculateRSI(data, 14);
   const macd = calculateMACD(data);
-  
+
   for (let i = 30; i < data.length; i++) {
     if (ema12[i] && ema26[i] && rsi[i] && macd.histogram[i]) {
-      // Buy signal: EMA12 > EMA26, RSI < 40, MACD histogram positive
       if (ema12[i] > ema26[i] && rsi[i] < 40 && macd.histogram[i] > 0) {
         signals.push({ time: data[i].time, position: 'belowBar', color: '#0f0', shape: 'arrowUp', text: 'BUY' });
       }
-      // Sell signal: EMA12 < EMA26, RSI > 60, MACD histogram negative
       else if (ema12[i] < ema26[i] && rsi[i] > 60 && macd.histogram[i] < 0) {
         signals.push({ time: data[i].time, position: 'aboveBar', color: '#f33', shape: 'arrowDown', text: 'SELL' });
       }
-      // Additional signals based on RSI extremes (deterministic - removed random)
       else if (rsi[i] < 30 && macd.histogram[i] > 0) {
         signals.push({ time: data[i].time, position: 'belowBar', color: '#0ff', shape: 'circle', text: 'R-BUY' });
       }
@@ -248,11 +810,10 @@ function randomStrategy(data) {
       }
     }
   }
-  
+
   return signals;
 }
 
-// Mark chart as ready for strategies
 function markChartReady() {
   chartReady = true;
   console.log('Chart marked as ready for strategy execution');
@@ -261,12 +822,11 @@ function markChartReady() {
   }
 }
 
-// Apply current strategy to data - FIXED: Only recalculate all signals on initial load or full data change
 function applyCurrentStrategy() {
   if (!chartReady || data.length === 0) return;
-  
+
   let newMarkers = [];
-  
+
   if (currentStrategy === 'immediate') {
     newMarkers = immediateSignalStrategy(data);
     updateStrategyStatus('Active: Immediate Signal Test');
@@ -283,32 +843,27 @@ function applyCurrentStrategy() {
       return;
     }
   }
-  
+
   markers = newMarkers;
   series.setMarkers(markers);
   lastProcessedIndex = data.length - 1;
   console.log(`Applied ${currentStrategy} strategy: ${markers.length} signals generated`);
 }
 
-// Apply strategy for only new candles - FIXED: Incremental signal updates
 function applyStrategyIncremental() {
   if (!chartReady || data.length === 0 || !currentStrategy) return;
-  
-  // Only process if we have new candles
+
   if (lastProcessedIndex >= data.length - 1) return;
-  
-  // For live updates, recalculate signals for the last few candles to ensure accuracy
-  // but keep all previous signals intact
-  const lookbackCandles = 60; // Enough for indicators to stabilize
+
+  const lookbackCandles = 60;
   const startIndex = Math.max(0, data.length - lookbackCandles);
-  
-  // Remove markers from the recalculation range
+
   const timeThreshold = data[startIndex].time;
   const preservedMarkers = markers.filter(m => m.time < timeThreshold);
-  
+
   let newMarkers = [];
   const recalcData = data.slice(startIndex);
-  
+
   if (currentStrategy === 'immediate') {
     newMarkers = immediateSignalStrategy(recalcData);
   } else if (currentStrategy === 'random') {
@@ -321,601 +876,628 @@ function applyStrategyIncremental() {
       return;
     }
   }
-  
-  // Combine preserved and new markers
+
   markers = [...preservedMarkers, ...newMarkers];
   series.setMarkers(markers);
   lastProcessedIndex = data.length - 1;
 }
 
-// Apply strategy
-function applyStrategy(strategyType) {
-  currentStrategy = strategyType;
-  lastProcessedIndex = -1;
-  
-  if (strategyInterval) {
-    clearInterval(strategyInterval);
-    strategyInterval = null;
+function updateStrategyStatus(text) {
+  const statusEl = document.getElementById('strategyStatus');
+  statusEl.textContent = text ? `(${text})` : '';
+}
+
+function updateStatus(txt, cls) {
+  const s = document.getElementById('status');
+  s.className = cls;
+  s.textContent = txt;
+}
+
+function setInfo(txt) {
+  document.getElementById('infoTxt').textContent = txt;
+}
+
+function setPair(txt) {
+  document.getElementById('pair').textContent = txt;
+}
+
+function showSpinner(main, sub) {
+  const sp = document.getElementById('spinner');
+  const txt = document.getElementById('spinner-text');
+  const subTxt = document.getElementById('spinner-sub');
+  const fill = document.getElementById('progress-fill');
+  txt.textContent = main;
+  subTxt.textContent = sub || '';
+  fill.style.width = '0%';
+  sp.style.display = 'block';
+}
+
+function hideSpinner() {
+  document.getElementById('spinner').style.display = 'none';
+}
+
+function updateProgress(pct) {
+  document.getElementById('progress-fill').style.width = `${pct}%`;
+}
+
+function fmtDate(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }).replace(',', '');
+}
+
+function toDateStr(ts) {
+  const d = new Date(ts * 1000);
+  const Y = d.getUTCFullYear();
+  const M = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const D = String(d.getUTCDate()).padStart(2, '0');
+  const h = String(d.getUTCHours()).padStart(2, '0');
+  const m = String(d.getUTCMinutes()).padStart(2, '0');
+  const s = String(d.getUTCSeconds()).padStart(2, '0');
+  return `${Y}-${M}-${D} ${h}:${m}:${s}`;
+}
+
+function initChart() {
+  const container = document.getElementById('chart');
+  chart = LightweightCharts.createChart(container, {
+    layout: { background: { color: '#000' }, textColor: '#fff' },
+    grid: { vertLines: { color: '#111' }, horzLines: { color: '#111' } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    timeScale: { timeVisible: true, secondsVisible: false }
+  });
+  series = chart.addCandlestickSeries({
+    upColor: '#0f0', downColor: '#f33',
+    borderUpColor: '#0f0', borderDownColor: '#f33',
+    wickUpColor: '#0f0', wickDownColor: '#f33'
+  });
+  chart.timeScale().fitContent();
+
+  window.addEventListener('resize', () => {
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    chart.resize(w, h);
+  });
+
+  markChartReady();
+}
+
+function loadSymbols(cat) {
+  const s = document.getElementById('sym');
+  s.innerHTML = '<option>Loading...</option>';
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    s.innerHTML = '<option>Error: Not connected</option>';
+    return;
   }
-  
+  socket.send(JSON.stringify({ active_symbols: cat, product_type: 'basic' }));
+}
+
+function processOHLC(arr, epoch) {
+  return { time: epoch, open: arr[0], high: arr[1], low: arr[2], close: arr[3] };
+}
+
+function renderData(skipFit) {
+  if (data.length === 0) return;
+  series.setData(data);
+  if (!skipFit) chart.timeScale().fitContent();
   applyCurrentStrategy();
-  
-  // Start live signal monitoring - only update incrementally
-  strategyInterval = setInterval(() => {
-    if (chartReady && data.length > 0) {
-      applyStrategyIncremental();
+}
+
+function startCountdown(nextCandle) {
+  if (countdownInterval) clearInterval(countdownInterval);
+  const cd = document.getElementById('countdown');
+
+  countdownInterval = setInterval(() => {
+    const now = Math.floor(Date.now() / 1000);
+    const diff = nextCandle - now;
+    if (diff <= 0) {
+      cd.textContent = '00:00';
+      return;
     }
-  }, 5000);
+    const min = Math.floor(diff / 60);
+    const sec = diff % 60;
+    cd.textContent = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  }, 1000);
 }
 
-// Update strategy status display
-function updateStrategyStatus(status) {
-  document.getElementById('strategyStatus').textContent = status;
+function loadHistorical() {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    alert('Not connected to server');
+    return;
+  }
+  data = [];
+  markers = [];
+  rangeStart = null;
+  rangeEnd = null;
+  const cnt = parseInt(document.getElementById('cnt').value, 10);
+  const tf = parseInt(document.getElementById('tf').value, 10);
+  showSpinner('Loading Historical Data...', `Fetching last ${cnt} candles`);
+  socket.send(JSON.stringify({ ticks_history: sym, adjust_start_time: 1, count: cnt, end: 'latest', start: 1, style: 'candles', granularity: tf }));
 }
 
-// Apply custom strategy from textarea
-function applyCustomStrategy() {
+async function fetchRange() {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    alert('Not connected');
+    return;
+  }
+  const df = document.getElementById('df').value;
+  const dt = document.getElementById('dt').value;
+  if (!df || !dt) {
+    alert('Please select both dates');
+    return;
+  }
+  const start = Math.floor(new Date(df + 'T00:00:00Z').getTime() / 1000);
+  const end = Math.floor(new Date(dt + 'T23:59:59Z').getTime() / 1000);
+  if (start >= end) {
+    alert('From date must be before To date');
+    return;
+  }
+
+  data = [];
+  markers = [];
+  rangeStart = start;
+  rangeEnd = end;
+  const tf = parseInt(document.getElementById('tf').value, 10);
+  const totalSeconds = end - start;
+  const candlesEstimate = Math.ceil(totalSeconds / tf);
+
+  showSpinner('Fetching Date Range...', `Estimated: ${candlesEstimate.toLocaleString()} candles`);
+
+  let currentStart = start;
+  let batchNum = 0;
+
+  while (currentStart < end) {
+    batchNum++;
+    const batchEnd = Math.min(currentStart + BATCH * tf, end);
+    const count = Math.ceil((batchEnd - currentStart) / tf);
+    updateProgress((currentStart - start) / totalSeconds * 100);
+
+    await new Promise((resolve) => {
+      const reqId = `range_${batchNum}`;
+      const listener = (msg) => {
+        const d = JSON.parse(msg.data);
+        if (d.echo_req && d.echo_req.req_id === reqId) {
+          if (d.candles) {
+            const chunk = d.candles.map(c => processOHLC(c.ohlc, c.epoch));
+            data = [...data, ...chunk];
+            console.log(`Batch ${batchNum}: fetched ${chunk.length} candles`);
+          }
+          socket.removeEventListener('message', listener);
+          resolve();
+        }
+      };
+      socket.addEventListener('message', listener);
+      socket.send(JSON.stringify({ ticks_history: sym, adjust_start_time: 1, count, end: batchEnd, start: currentStart, style: 'candles', granularity: tf, req_id: reqId }));
+    });
+
+    currentStart += BATCH * tf;
+
+    if (data.length > MAX) {
+      hideSpinner();
+      alert(`Dataset exceeds ${MAX.toLocaleString()} candles. Please reduce date range.`);
+      data = [];
+      return;
+    }
+  }
+
+  updateProgress(100);
+  hideSpinner();
+  renderData();
+  const d1 = toDateStr(data[0].time);
+  const d2 = toDateStr(data[data.length - 1].time);
+  setInfo(`${data.length.toLocaleString()} candles | ${d1} → ${d2}`);
+  alert(`Loaded ${data.length.toLocaleString()} candles`);
+}
+
+function startLive() {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    alert('Not connected');
+    return;
+  }
+  if (data.length === 0) {
+    alert('Load historical data first');
+    return;
+  }
+  socket.send(JSON.stringify({ ticks_history: sym, adjust_start_time: 1, count: 1, end: 'latest', start: 1, style: 'candles', granularity: gran, subscribe: 1 }));
+}
+
+function downloadCSV() {
+  if (data.length === 0) {
+    alert('No data to export');
+    return;
+  }
+
+  console.log('Generating CSV with all indicators...');
+  
+  const allIndicators = calculateAllIndicators(data);
+  
+  let csv = 'Timestamp,Date,Open,High,Low,Close,';
+  csv += 'Returns,HL_Range,OC_Range,Body_Pct,';
+  csv += 'SMA_5,SMA_10,SMA_20,SMA_50,SMA_100,SMA_200,';
+  csv += 'EMA_5,EMA_10,EMA_12,EMA_20,EMA_26,EMA_50,EMA_100,EMA_200,';
+  csv += 'WMA_10,WMA_20,WMA_50,';
+  csv += 'RSI_7,RSI_14,RSI_21,';
+  csv += 'MACD_Line,MACD_Signal,MACD_Histogram,';
+  csv += 'Stoch_K,Stoch_D,';
+  csv += 'ATR_14,ATR_20,';
+  csv += 'BB_Upper,BB_Middle,BB_Lower,BB_Bandwidth,';
+  csv += 'CCI_20,Williams_R_14,ROC_12,MFI_14,';
+  csv += 'ADX_14,Plus_DI,Minus_DI,';
+  csv += 'OBV,VWAP,StdDev_20,';
+  csv += 'Pivot_Point,R1,R2,R3,S1,S2,S3,';
+  csv += 'Ichimoku_Tenkan,Ichimoku_Kijun,Ichimoku_SenkouA,Ichimoku_SenkouB,Ichimoku_Chikou,';
+  csv += 'Keltner_Upper,Keltner_Middle,Keltner_Lower,';
+  csv += 'Parabolic_SAR\n';
+
+  data.forEach((row, i) => {
+    const dateStr = toDateStr(row.time);
+    csv += `${row.time},${dateStr},${row.open},${row.high},${row.low},${row.close},`;
+    csv += `${allIndicators.returns[i] ?? ''},${allIndicators.hl[i] ?? ''},${allIndicators.oc[i] ?? ''},${allIndicators.bodyPct[i] ?? ''},`;
+    csv += `${allIndicators.sma5[i] ?? ''},${allIndicators.sma10[i] ?? ''},${allIndicators.sma20[i] ?? ''},${allIndicators.sma50[i] ?? ''},${allIndicators.sma100[i] ?? ''},${allIndicators.sma200[i] ?? ''},`;
+    csv += `${allIndicators.ema5[i] ?? ''},${allIndicators.ema10[i] ?? ''},${allIndicators.ema12[i] ?? ''},${allIndicators.ema20[i] ?? ''},${allIndicators.ema26[i] ?? ''},${allIndicators.ema50[i] ?? ''},${allIndicators.ema100[i] ?? ''},${allIndicators.ema200[i] ?? ''},`;
+    csv += `${allIndicators.wma10[i] ?? ''},${allIndicators.wma20[i] ?? ''},${allIndicators.wma50[i] ?? ''},`;
+    csv += `${allIndicators.rsi7[i] ?? ''},${allIndicators.rsi14[i] ?? ''},${allIndicators.rsi21[i] ?? ''},`;
+    csv += `${allIndicators.macdLine[i] ?? ''},${allIndicators.macdSignal[i] ?? ''},${allIndicators.macdHistogram[i] ?? ''},`;
+    csv += `${allIndicators.stochK[i] ?? ''},${allIndicators.stochD[i] ?? ''},`;
+    csv += `${allIndicators.atr14[i] ?? ''},${allIndicators.atr20[i] ?? ''},`;
+    csv += `${allIndicators.bbUpper[i] ?? ''},${allIndicators.bbMiddle[i] ?? ''},${allIndicators.bbLower[i] ?? ''},${allIndicators.bbBandwidth[i] ?? ''},`;
+    csv += `${allIndicators.cci20[i] ?? ''},${allIndicators.williamsR14[i] ?? ''},${allIndicators.roc12[i] ?? ''},${allIndicators.mfi14[i] ?? ''},`;
+    csv += `${allIndicators.adx14[i] ?? ''},${allIndicators.plusDI[i] ?? ''},${allIndicators.minusDI[i] ?? ''},`;
+    csv += `${allIndicators.obv[i] ?? ''},${allIndicators.vwap[i] ?? ''},${allIndicators.stdDev20[i] ?? ''},`;
+    csv += `${allIndicators.pivotPoint[i] ?? ''},${allIndicators.r1[i] ?? ''},${allIndicators.r2[i] ?? ''},${allIndicators.r3[i] ?? ''},${allIndicators.s1[i] ?? ''},${allIndicators.s2[i] ?? ''},${allIndicators.s3[i] ?? ''},`;
+    csv += `${allIndicators.ichimokuTenkan[i] ?? ''},${allIndicators.ichimokuKijun[i] ?? ''},${allIndicators.ichimokuSenkouA[i] ?? ''},${allIndicators.ichimokuSenkouB[i] ?? ''},${allIndicators.ichimokuChikou[i] ?? ''},`;
+    csv += `${allIndicators.keltnerUpper[i] ?? ''},${allIndicators.keltnerMiddle[i] ?? ''},${allIndicators.keltnerLower[i] ?? ''},`;
+    csv += `${allIndicators.psar[i] ?? ''}\n`;
+  });
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${sym}_${gran}s_with_indicators.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  
+  console.log('CSV export with all indicators completed!');
+}
+
+function downloadXLSX() {
+  if (data.length === 0) {
+    alert('No data to export');
+    return;
+  }
+
+  console.log('Generating XLSX with all indicators...');
+  
+  const allIndicators = calculateAllIndicators(data);
+  
+  const rows = data.map((row, i) => ({
+    Timestamp: row.time,
+    Date: toDateStr(row.time),
+    Open: row.open,
+    High: row.high,
+    Low: row.low,
+    Close: row.close,
+    Returns: allIndicators.returns[i],
+    HL_Range: allIndicators.hl[i],
+    OC_Range: allIndicators.oc[i],
+    Body_Pct: allIndicators.bodyPct[i],
+    SMA_5: allIndicators.sma5[i],
+    SMA_10: allIndicators.sma10[i],
+    SMA_20: allIndicators.sma20[i],
+    SMA_50: allIndicators.sma50[i],
+    SMA_100: allIndicators.sma100[i],
+    SMA_200: allIndicators.sma200[i],
+    EMA_5: allIndicators.ema5[i],
+    EMA_10: allIndicators.ema10[i],
+    EMA_12: allIndicators.ema12[i],
+    EMA_20: allIndicators.ema20[i],
+    EMA_26: allIndicators.ema26[i],
+    EMA_50: allIndicators.ema50[i],
+    EMA_100: allIndicators.ema100[i],
+    EMA_200: allIndicators.ema200[i],
+    WMA_10: allIndicators.wma10[i],
+    WMA_20: allIndicators.wma20[i],
+    WMA_50: allIndicators.wma50[i],
+    RSI_7: allIndicators.rsi7[i],
+    RSI_14: allIndicators.rsi14[i],
+    RSI_21: allIndicators.rsi21[i],
+    MACD_Line: allIndicators.macdLine[i],
+    MACD_Signal: allIndicators.macdSignal[i],
+    MACD_Histogram: allIndicators.macdHistogram[i],
+    Stoch_K: allIndicators.stochK[i],
+    Stoch_D: allIndicators.stochD[i],
+    ATR_14: allIndicators.atr14[i],
+    ATR_20: allIndicators.atr20[i],
+    BB_Upper: allIndicators.bbUpper[i],
+    BB_Middle: allIndicators.bbMiddle[i],
+    BB_Lower: allIndicators.bbLower[i],
+    BB_Bandwidth: allIndicators.bbBandwidth[i],
+    CCI_20: allIndicators.cci20[i],
+    Williams_R_14: allIndicators.williamsR14[i],
+    ROC_12: allIndicators.roc12[i],
+    MFI_14: allIndicators.mfi14[i],
+    ADX_14: allIndicators.adx14[i],
+    Plus_DI: allIndicators.plusDI[i],
+    Minus_DI: allIndicators.minusDI[i],
+    OBV: allIndicators.obv[i],
+    VWAP: allIndicators.vwap[i],
+    StdDev_20: allIndicators.stdDev20[i],
+    Pivot_Point: allIndicators.pivotPoint[i],
+    R1: allIndicators.r1[i],
+    R2: allIndicators.r2[i],
+    R3: allIndicators.r3[i],
+    S1: allIndicators.s1[i],
+    S2: allIndicators.s2[i],
+    S3: allIndicators.s3[i],
+    Ichimoku_Tenkan: allIndicators.ichimokuTenkan[i],
+    Ichimoku_Kijun: allIndicators.ichimokuKijun[i],
+    Ichimoku_SenkouA: allIndicators.ichimokuSenkouA[i],
+    Ichimoku_SenkouB: allIndicators.ichimokuSenkouB[i],
+    Ichimoku_Chikou: allIndicators.ichimokuChikou[i],
+    Keltner_Upper: allIndicators.keltnerUpper[i],
+    Keltner_Middle: allIndicators.keltnerMiddle[i],
+    Keltner_Lower: allIndicators.keltnerLower[i],
+    Parabolic_SAR: allIndicators.psar[i]
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Data');
+  XLSX.writeFile(wb, `${sym}_${gran}s_with_indicators.xlsx`);
+  
+  console.log('XLSX export with all indicators completed!');
+}
+
+function runBacktest() {
+  if (data.length === 0 || markers.length === 0) {
+    alert('No data or signals');
+    return;
+  }
+  const slP = parseFloat(document.getElementById('slP').value) || 0;
+  const tpP = parseFloat(document.getElementById('tpP').value) || 0;
+  const hold = parseInt(document.getElementById('hold').value, 10) || 5;
+
+  let wins = 0, losses = 0, totalProfit = 0;
+
+  markers.forEach(m => {
+    const idx = data.findIndex(d => d.time === m.time);
+    if (idx === -1 || idx + hold >= data.length) return;
+
+    const entry = data[idx].close;
+    const side = m.text.includes('BUY') ? 'buy' : 'sell';
+    let pnl = 0;
+    let hit = false;
+
+    for (let i = idx + 1; i <= idx + hold; i++) {
+      const c = data[i].close;
+      const diff = side === 'buy' ? (c - entry) / entry * 100 : (entry - c) / entry * 100;
+
+      if (tpP > 0 && diff >= tpP) {
+        pnl = tpP;
+        hit = true;
+        break;
+      }
+      if (slP > 0 && diff <= -slP) {
+        pnl = -slP;
+        hit = true;
+        break;
+      }
+
+      if (i === idx + hold) {
+        pnl = diff;
+      }
+    }
+
+    totalProfit += pnl;
+    if (pnl > 0) wins++;
+    else if (pnl < 0) losses++;
+  });
+
+  const total = wins + losses;
+  const winRate = total > 0 ? (wins / total * 100).toFixed(2) : 0;
+  document.getElementById('results').innerHTML = `
+    Total Trades: ${total}<br>
+    Wins: ${wins} | Losses: ${losses}<br>
+    Win Rate: ${winRate}%<br>
+    Total P/L: ${totalProfit.toFixed(2)}%
+  `;
+}
+
+function clearBacktest() {
+  document.getElementById('results').innerHTML = 'Run a backtest to see results';
+}
+
+function connectWS() {
+  socket = new WebSocket(WS_URL);
+
+  socket.addEventListener('open', () => {
+    updateStatus('🟢 Connected', 's-green');
+    socket.send(JSON.stringify({ website_status: 1 }));
+  });
+
+  socket.addEventListener('close', () => {
+    updateStatus('🔴 Disconnected', 's-red');
+  });
+
+  socket.addEventListener('error', () => {
+    updateStatus('🔴 Connection Error', 's-red');
+  });
+
+  socket.addEventListener('message', (msg) => {
+    const d = JSON.parse(msg.data);
+
+    if (d.website_status && d.website_status.currencies_config) {
+      const cats = Object.keys(d.website_status.currencies_config).map(k => ({
+        id: k.toLowerCase(),
+        name: d.website_status.currencies_config[k].name
+      }));
+      const cat = document.getElementById('cat');
+      cat.innerHTML = cats.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      loadSymbols(cats[0].id);
+    }
+
+    if (d.active_symbols) {
+      const symEl = document.getElementById('sym');
+      const filtered = d.active_symbols.filter(s => s.market === 'forex' || s.market === 'indices' || s.market === 'commodities' || s.market === 'synthetic_index');
+      symEl.innerHTML = filtered.map(s => `<option value="${s.symbol}">${s.display_name}</option>`).join('');
+      sym = filtered[0].symbol;
+      setPair(filtered[0].display_name);
+    }
+
+    if (d.candles && !d.subscription) {
+      const candles = d.candles.map(c => processOHLC(c.ohlc, c.epoch));
+      data = candles;
+      hideSpinner();
+      renderData();
+      const d1 = toDateStr(data[0].time);
+      const d2 = toDateStr(data[data.length - 1].time);
+      setInfo(`${data.length.toLocaleString()} candles | ${d1} → ${d2}`);
+    }
+
+    if (d.ohlc && d.subscription) {
+      const candle = processOHLC(d.ohlc.ohlc, d.ohlc.epoch);
+      const lastIdx = data.findIndex(c => c.time === candle.time);
+
+      if (lastIdx !== -1) {
+        data[lastIdx] = candle;
+      } else {
+        data.push(candle);
+      }
+
+      renderData(true);
+      applyStrategyIncremental();
+      const nextCandle = candle.time + gran;
+      startCountdown(nextCandle);
+      updateStatus('🟢 Live Stream', 's-green');
+    }
+  });
+}
+
+document.getElementById('cat').addEventListener('change', e => loadSymbols(e.target.value));
+document.getElementById('sym').addEventListener('change', e => {
+  sym = e.target.value;
+  const opt = e.target.selectedOptions[0];
+  setPair(opt.textContent);
+});
+document.getElementById('tf').addEventListener('change', e => {
+  gran = parseInt(e.target.value, 10);
+});
+document.getElementById('loadH').addEventListener('click', loadHistorical);
+document.getElementById('fetchR').addEventListener('click', fetchRange);
+document.getElementById('live').addEventListener('click', startLive);
+document.getElementById('csv').addEventListener('click', downloadCSV);
+document.getElementById('xlsx').addEventListener('click', downloadXLSX);
+document.getElementById('runBt').addEventListener('click', runBacktest);
+document.getElementById('clr').addEventListener('click', clearBacktest);
+document.getElementById('scrollStart').addEventListener('click', () => {
+  if (data.length > 0) chart.timeScale().scrollToPosition(-data.length, false);
+});
+document.getElementById('scrollEnd').addEventListener('click', () => {
+  if (data.length > 0) chart.timeScale().scrollToRealTime();
+});
+
+document.getElementById('bt').addEventListener('click', () => {
+  const drawer = document.getElementById('drawer');
+  drawer.classList.toggle('open');
+});
+
+document.getElementById('strategyBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const dropdown = document.getElementById('strategyDropdown');
+  dropdown.classList.toggle('show');
+});
+
+document.addEventListener('click', () => {
+  const dropdown = document.getElementById('strategyDropdown');
+  dropdown.classList.remove('show');
+});
+
+document.getElementById('stratImmediate').addEventListener('click', () => {
+  currentStrategy = 'immediate';
+  customStrategyFunc = null;
+  applyCurrentStrategy();
+  document.getElementById('strategyDropdown').classList.remove('show');
+});
+
+document.getElementById('stratRandom').addEventListener('click', () => {
+  currentStrategy = 'random';
+  customStrategyFunc = null;
+  applyCurrentStrategy();
+  document.getElementById('strategyDropdown').classList.remove('show');
+});
+
+document.getElementById('stratPaste').addEventListener('click', () => {
+  document.getElementById('strategyModal').classList.add('show');
+  document.getElementById('strategyDropdown').classList.remove('show');
+});
+
+document.getElementById('modalCancel').addEventListener('click', () => {
+  document.getElementById('strategyModal').classList.remove('show');
+});
+
+document.getElementById('modalApply').addEventListener('click', () => {
   const code = document.getElementById('strategyCode').value.trim();
   if (!code) {
     alert('Please paste your strategy code');
     return;
   }
-  
+
   try {
-    customStrategyFunc = new Function('data', code + '\n\nif (typeof customStrategy === "function") return customStrategy(data); else return [,'ultra_extra_1','ultra_extra_2','ultra_extra_3','ultra_extra_4','ultra_extra_5','ultra_extra_6','ultra_extra_7','ultra_extra_8','ultra_extra_9','ultra_extra_10','ultra_extra_11','ultra_extra_12','ultra_extra_13','ultra_extra_14','ultra_extra_15','ultra_extra_16','ultra_extra_17','ultra_extra_18','ultra_extra_19','ultra_extra_20','ultra_extra_21','ultra_extra_22','ultra_extra_23','ultra_extra_24','ultra_extra_25','ultra_extra_26','ultra_extra_27','ultra_extra_28','ultra_extra_29','ultra_extra_30','ultra_extra_31','ultra_extra_32','ultra_extra_33','ultra_extra_34','ultra_extra_35','ultra_extra_36','ultra_extra_37','ultra_extra_38','ultra_extra_39','ultra_extra_40','ultra_extra_41','ultra_extra_42','ultra_extra_43','ultra_extra_44','ultra_extra_45','ultra_extra_46','ultra_extra_47','ultra_extra_48','ultra_extra_49','ultra_extra_50','ultra_extra_51','ultra_extra_52','ultra_extra_53','ultra_extra_54','ultra_extra_55','ultra_extra_56','ultra_extra_57','ultra_extra_58','ultra_extra_59','ultra_extra_60','ultra_extra_61','ultra_extra_62','ultra_extra_63','ultra_extra_64','ultra_extra_65','ultra_extra_66','ultra_extra_67','ultra_extra_68','ultra_extra_69','ultra_extra_70','ultra_extra_71','ultra_extra_72','ultra_extra_73','ultra_extra_74','ultra_extra_75','ultra_extra_76','ultra_extra_77','ultra_extra_78','ultra_extra_79','ultra_extra_80','ultra_extra_81','ultra_extra_82','ultra_extra_83','ultra_extra_84','ultra_extra_85','ultra_extra_86','ultra_extra_87','ultra_extra_88','ultra_extra_89','ultra_extra_90','ultra_extra_91','ultra_extra_92','ultra_extra_93','ultra_extra_94','ultra_extra_95','ultra_extra_96','ultra_extra_97','ultra_extra_98','ultra_extra_99','ultra_extra_100'];');
-    currentStrategy = 'custom';
-    applyStrategy('custom');
-    document.getElementById('strategyModal').classList.remove('show');
+    eval(code);
+    if (typeof customStrategy === 'function') {
+      customStrategyFunc = customStrategy;
+      currentStrategy = 'custom';
+      applyCurrentStrategy();
+      document.getElementById('strategyModal').classList.remove('show');
+      alert('Custom strategy applied successfully!');
+    } else {
+      alert('Strategy code must define a function named "customStrategy"');
+    }
   } catch (err) {
     alert('Error in strategy code: ' + err.message);
     console.error(err);
   }
-}
+});
 
-// Handle strategy file upload
-function handleStrategyFileUpload(e) {
+document.getElementById('stratUpload').addEventListener('click', () => {
+  document.getElementById('strategyFileInput').click();
+  document.getElementById('strategyDropdown').classList.remove('show');
+});
+
+document.getElementById('strategyFileInput').addEventListener('change', (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  
+
   const reader = new FileReader();
-  reader.onload = function(event) {
+  reader.onload = (event) => {
     const code = event.target.result;
-    document.getElementById('strategyCode').value = code;
-    document.getElementById('strategyModal').classList.add('show');
+    try {
+      eval(code);
+      if (typeof customStrategy === 'function') {
+        customStrategyFunc = customStrategy;
+        currentStrategy = 'custom';
+        applyCurrentStrategy();
+        alert('Custom strategy from file applied successfully!');
+      } else {
+        alert('File must define a function named "customStrategy"');
+      }
+    } catch (err) {
+      alert('Error in strategy file: ' + err.message);
+      console.error(err);
+    }
   };
   reader.readAsText(file);
-}
-
-// Init chart
-const container=document.getElementById('chart');
-chart=LightweightCharts.createChart(container,{width:container.clientWidth,height:container.clientHeight,layout:{background:{color:'#000'},textColor:'#fff'},grid:{vertLines:{color:'#222'},horzLines:{color:'#222'}},timeScale:{timeVisible:true,secondsVisible:false}});
-series=chart.addCandlestickSeries({upColor:'#0f0',downColor:'#f33',borderVisible:false,wickUpColor:'#0f0',wickDownColor:'#f33'});
-window.addEventListener('resize',()=>chart.applyOptions({width:container.clientWidth,height:container.clientHeight}));
-
-// Load symbols
-const catSel=document.getElementById('cat'),symSel=document.getElementById('sym');
-let symbolsData={},firstCandleDates={};
-catSel.innerHTML='<option>Loading markets...</option>';
-const ws=new WebSocket(WS_URL);
-ws.onopen=()=>ws.send(JSON.stringify({active_symbols:'brief',product_type:'basic'}));
-ws.onmessage=e=>{
-try{
-const d=JSON.parse(e.data);
-if(d.active_symbols&&Array.isArray(d.active_symbols)){
-const cats={};
-d.active_symbols.forEach(s=>{
-const c=s.market_display_name||s.market||'Other';
-if(!cats[c])cats[c]=[];
-cats[c].push(s);
-symbolsData[s.symbol]=s;
 });
-catSel.innerHTML='';Object.keys(cats).sort().forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=`${c} (${cats[c].length})`;catSel.appendChild(o)});
-catSel.onchange=()=>{
-symSel.innerHTML='';
-const sc=catSel.value;
-(cats[sc]||[]).forEach(s=>{
-const o=document.createElement('option');
-o.value=s.symbol;
-let label=s.display_name;
-if(firstCandleDates[s.symbol]){
-label+=` (From: ${firstCandleDates[s.symbol]})`;
-}
-o.textContent=label;
-symSel.appendChild(o);
-});
-};
-symSel.onchange=fetchFirstCandle;
-catSel.onchange();document.getElementById("status").className="s-green";document.getElementById("status").textContent="🟢 Ready";ws.close();
-}else if(d.error){catSel.innerHTML='<option>Error: '+d.error.message+'</option>';ws.close()}
-}catch(err){console.error(err)}
-};
-ws.onerror=()=>{catSel.innerHTML='<option>Connection failed</option>';setTimeout(()=>{catSel.innerHTML='<option>Tap to retry</option>';catSel.onclick=()=>{catSel.onclick=null;location.reload()}},1000)};
 
-// Event listeners
-document.getElementById('loadH').onclick=loadHist;
-document.getElementById('fetchR').onclick=fetchRange;
-document.getElementById('live').onclick=startLive;
-document.getElementById('csv').onclick=exportCSV;
-document.getElementById('xlsx').onclick=exportXLSX;
-document.getElementById('bt').onclick=()=>document.getElementById('drawer').classList.toggle('open');
-document.getElementById('runBt').onclick=runBacktest;
-document.getElementById('clr').onclick=()=>{document.getElementById('results').textContent='Run a backtest to see results';markers=[];series.setMarkers([])};
-symSel.onchange=fetchFirstCandle;
-document.getElementById('scrollStart').onclick=()=>{if(data.length>0)chart.timeScale().scrollToPosition(-data.length,false)};
-document.getElementById('scrollEnd').onclick=()=>{if(data.length>0)chart.timeScale().scrollToRealTime()};
-document.getElementById('df').value='';
-document.getElementById('dt').value='';
+const today = new Date();
+const yesterday = new Date(today);
+yesterday.setDate(yesterday.getDate() - 1);
+document.getElementById('df').value = yesterday.toISOString().split('T')[0];
+document.getElementById('dt').value = today.toISOString().split('T')[0];
 
-// Strategy event listeners
-document.getElementById('strategyBtn').onclick=()=>document.getElementById('strategyDropdown').classList.toggle('show');
-document.getElementById('stratImmediate').onclick=()=>{applyStrategy('immediate');document.getElementById('strategyDropdown').classList.remove('show')};
-document.getElementById('stratRandom').onclick=()=>{applyStrategy('random');document.getElementById('strategyDropdown').classList.remove('show')};
-document.getElementById('stratPaste').onclick=()=>{document.getElementById('strategyModal').classList.add('show');document.getElementById('strategyDropdown').classList.remove('show')};
-document.getElementById('stratUpload').onclick=()=>{document.getElementById('strategyFileInput').click();document.getElementById('strategyDropdown').classList.remove('show')};
-document.getElementById('modalCancel').onclick=()=>document.getElementById('strategyModal').classList.remove('show');
-document.getElementById('modalApply').onclick=applyCustomStrategy;
-document.getElementById('strategyFileInput').onchange=handleStrategyFileUpload;
-document.addEventListener('click',e=>{if(!e.target.closest('.strategy-btn'))document.getElementById('strategyDropdown').classList.remove('show')});
-
-// Fetch first available candle date
-function fetchFirstCandle(){
-const s=symSel.value;
-if(!s||s==='Select symbol'||firstCandleDates[s])return;
-const ws=new WebSocket(WS_URL);
-const veryOldDate=Math.floor(new Date('2000-01-01').getTime()/1000);
-ws.onopen=()=>ws.send(JSON.stringify({ticks_history:s,adjust_start_time:1,count:1,start:veryOldDate,granularity:60,style:'candles'}));
-ws.onmessage=e=>{
-try{
-const d=JSON.parse(e.data);
-if(d.candles&&d.candles.length>0){
-const ts=d.candles[0].epoch;
-const dt=new Date(ts*1000).toISOString().split('T')[0];
-firstCandleDates[s]=dt;
-const opt=Array.from(symSel.options).find(o=>o.value===s);
-if(opt)opt.textContent=symbolsData[s].display_name+` (From: ${dt})`;
-}
-ws.close();
-}catch(err){console.error(err);ws.close()}
-};
-ws.onerror=()=>ws.close();
-}
-
-// Render data
-function render(){
-if(data.length===0)return;
-try{
-const validData=data.filter(c=>c&&c.time&&!isNaN(c.open)&&!isNaN(c.high)&&!isNaN(c.low)&&!isNaN(c.close));
-if(validData.length===0){
-console.error('No valid candle data to render');
-hideSpinner();
-return;
-}
-series.setData(validData);
-document.getElementById('pair').textContent=`${sym} | ${gran}s | ${validData.length} candles`;
-document.getElementById('infoTxt').textContent=`Loaded ${validData.length} candles`;
-chart.timeScale().fitContent();
-markChartReady();
-      try{ if(Array.isArray(data)) window.chartDataArray = data; else if(window.data && Array.isArray(window.data)) window.chartDataArray = window.data; }catch(e){}
-
-}catch(err){
-console.error('Error rendering chart:',err);
-hideSpinner();
-alert('Error displaying chart data. Please try again.');
-}
-}
-
-// Show/hide spinner
-function showSpinner(txt,sub=''){document.getElementById('spinner').style.display='block';document.getElementById('spinner-text').textContent=txt;document.getElementById('spinner-sub').textContent=sub;document.getElementById('progress-fill').style.width='0%'}
-function hideSpinner(){document.getElementById('spinner').style.display='none'}
-function updateProgress(pct){document.getElementById('progress-fill').style.width=pct+'%'}
-function formatDate(ts){const d=new Date(ts*1000);return d.toLocaleDateString('en-GB')}
-function calculateDays(start,end){return Math.ceil((end-start)/86400)}
-
-// Load historical data - FIXED: Continue loading even if batch is not exactly BATCH size
-function loadHist(){
-const s=symSel.value;
-if(!s||s==='Select symbol'){alert('Select a symbol');return}
-sym=s;gran=parseInt(document.getElementById('tf').value);
-const cnt=parseInt(document.getElementById('cnt').value);
-data=[];markers=[];series.setMarkers([]);lastProcessedIndex=-1;
-const estimatedDays=Math.ceil((cnt*gran)/86400);
-showSpinner(`Preparing to load ${cnt.toLocaleString()} candles (~${estimatedDays} days)...`,'Initializing connection...');
-chartReady=false;
-const ws=new WebSocket(WS_URL);
-let startTime=null;
-ws.onopen=()=>{
-const end=Math.floor(Date.now()/1000);
-ws.send(JSON.stringify({ticks_history:sym,adjust_start_time:1,count:Math.min(cnt,BATCH),end:end,granularity:gran,style:'candles'}));
-};
-let totalReceived=0;
-ws.onmessage=e=>{
-try{
-const d=JSON.parse(e.data);
-if(d.candles&&d.candles.length>0){
-const candles=d.candles.map(c=>({time:c.epoch,open:parseFloat(c.open),high:parseFloat(c.high),low:parseFloat(c.low),close:parseFloat(c.close)})).filter(c=>c&&c.time&&!isNaN(c.open)&&!isNaN(c.high)&&!isNaN(c.low)&&!isNaN(c.close));
-if(candles.length>0){
-data.push(...candles);
-totalReceived+=candles.length;
-if(startTime===null)startTime=candles[candles.length-1].time;
-const endTime=candles[0].time;
-const days=calculateDays(endTime,startTime);
-const dateRange=`${formatDate(endTime)} to ${formatDate(startTime)} (${days} days)`;
-updateProgress((totalReceived/cnt)*100);
-showSpinner(`Loading ${cnt.toLocaleString()} candles...`,`Fetched ${totalReceived.toLocaleString()} of ${cnt.toLocaleString()} | ${dateRange}`);
-if(totalReceived<cnt&&candles.length>0){
-const nextEnd=candles[0].time-1;
-ws.send(JSON.stringify({ticks_history:sym,adjust_start_time:1,count:Math.min(cnt-totalReceived,BATCH),end:nextEnd,granularity:gran,style:'candles'}));
-}else{
-data.sort((a,b)=>a.time-b.time);
-render();
-hideSpinner();
-ws.close();
-}
-}else{
-data.sort((a,b)=>a.time-b.time);
-render();
-hideSpinner();
-ws.close();
-}
-}else if(d.error){alert('Error: '+d.error.message);hideSpinner();ws.close()}
-}catch(err){console.error('Error processing candles:',err);hideSpinner();ws.close()}
-};
-ws.onerror=()=>{alert('Connection failed');hideSpinner()};
-}
-
-// Fetch date range - FIXED: Continue loading even if batch is not exactly BATCH size
-function fetchRange(){
-const s=symSel.value;
-if(!s||s==='Select symbol'){alert('Select a symbol');return}
-const fromDate=document.getElementById('df').value;
-const toDate=document.getElementById('dt').value;
-if(!fromDate||!toDate){alert('Select both dates');return}
-sym=s;gran=parseInt(document.getElementById('tf').value);
-const start=Math.floor(new Date(fromDate).getTime()/1000);
-const end=Math.floor(new Date(toDate).getTime()/1000)+86399;
-if(start>=end){alert('From date must be before To date');return}
-const estimatedCount=Math.floor((end-start)/gran);
-const totalDays=calculateDays(start,end);
-if(estimatedCount>MAX){alert(`Too many candles (~${estimatedCount.toLocaleString()}). Max is ${MAX.toLocaleString()}`);return}
-data=[];markers=[];series.setMarkers([]);lastProcessedIndex=-1;
-showSpinner(`Preparing to fetch ~${estimatedCount.toLocaleString()} candles...`,`Date range: ${formatDate(start)} to ${formatDate(end)} (${totalDays} days)`);
-chartReady=false;
-rangeStart=start;
-rangeEnd=end;
-const ws=new WebSocket(WS_URL);
-let currentEnd=end;
-let totalReceived=0;
-ws.onopen=()=>{
-ws.send(JSON.stringify({ticks_history:sym,adjust_start_time:1,start:start,end:currentEnd,granularity:gran,style:'candles'}));
-};
-ws.onmessage=e=>{
-try{
-const d=JSON.parse(e.data);
-if(d.candles&&d.candles.length>0){
-const candles=d.candles.map(c=>({time:c.epoch,open:parseFloat(c.open),high:parseFloat(c.high),low:parseFloat(c.low),close:parseFloat(c.close)})).filter(c=>c&&c.time&&!isNaN(c.open)&&!isNaN(c.high)&&!isNaN(c.low)&&!isNaN(c.close));
-if(candles.length>0){
-data.push(...candles);
-totalReceived+=candles.length;
-const progress=Math.min(100,(totalReceived/estimatedCount)*100);
-updateProgress(progress);
-const currentStart=candles[0].time;
-const currentDays=calculateDays(currentStart,end);
-showSpinner(`Fetching ${estimatedCount.toLocaleString()} candles...`,`Fetched ${totalReceived.toLocaleString()} of ${estimatedCount.toLocaleString()} | ${formatDate(currentStart)} to ${formatDate(end)} (${currentDays} days)`);
-if(candles[0].time>start){
-currentEnd=candles[0].time-1;
-ws.send(JSON.stringify({ticks_history:sym,adjust_start_time:1,start:start,end:currentEnd,granularity:gran,style:'candles'}));
-}else{
-const uniqueData=new Map();
-data.forEach(c=>uniqueData.set(c.time,c));
-data=Array.from(uniqueData.values()).sort((a,b)=>a.time-b.time);
-render();
-hideSpinner();
-ws.close();
-}
-}else{
-const uniqueData=new Map();
-data.forEach(c=>uniqueData.set(c.time,c));
-data=Array.from(uniqueData.values()).sort((a,b)=>a.time-b.time);
-render();
-hideSpinner();
-ws.close();
-}
-}else if(d.error){alert('Error: '+d.error.message);hideSpinner();ws.close()}
-}catch(err){console.error('Error processing candles:',err);hideSpinner();ws.close()}
-};
-ws.onerror=()=>{alert('Connection failed');hideSpinner()};
-}
-
-// Start live stream - FIXED: Normalize candle time to prevent duplicates
-function startLive(){
-if(!sym){alert('Load historical data first');return}
-if(socket){socket.close();socket=null}
-socket=new WebSocket(WS_URL);
-socket.onopen=()=>{
-socket.send(JSON.stringify({ticks_history:sym,adjust_start_time:1,count:1,end:'latest',granularity:gran,style:'candles',subscribe:1}));
-document.getElementById('status').className='s-yellow';
-document.getElementById('status').textContent='🟡 Connecting...';
-};
-socket.onmessage=e=>{
-try{
-const d=JSON.parse(e.data);
-if(d.ohlc){
-// FIXED: Normalize the epoch time to the candle period boundary
-const rawEpoch = d.ohlc.epoch;
-const normalizedTime = Math.floor(rawEpoch / gran) * gran;
-const c={time:normalizedTime,open:parseFloat(d.ohlc.open),high:parseFloat(d.ohlc.high),low:parseFloat(d.ohlc.low),close:parseFloat(d.ohlc.close)};
-const idx=data.findIndex(x=>x.time===c.time);
-if(idx>=0){
-// Update existing candle
-data[idx]=c;
-}else{
-// Add new candle
-data.push(c);
-}
-if(c&&c.time&&!isNaN(c.open)&&!isNaN(c.high)&&!isNaN(c.low)&&!isNaN(c.close)){series.update(c)}
-last=c;
-document.getElementById('status').className='s-green';
-document.getElementById('status').textContent='🟢 Live';
-updateCountdown(normalizedTime);
-}else if(d.error){console.error(d.error);document.getElementById('status').className='s-red';document.getElementById('status').textContent='🔴 Error'}
-}catch(err){console.error(err)}
-};
-socket.onerror=()=>{document.getElementById('status').className='s-red';document.getElementById('status').textContent='🔴 Disconnected'};
-socket.onclose=()=>{document.getElementById('status').className='s-red';document.getElementById('status').textContent='🔴 Disconnected'};
-}
-
-// Update countdown
-function updateCountdown(epoch){
-if(countdownInterval){
-clearInterval(countdownInterval);
-countdownInterval=null;
-}
-const next=epoch+gran;
-const cd=document.getElementById('countdown');
-countdownInterval=setInterval(()=>{
-const now=Math.floor(Date.now()/1000);
-const left=next-now;
-if(left>0){
-const m=Math.floor(left/60);
-const s=left%60;
-cd.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-}else{cd.textContent='00:00'}
-},1000);
-}
-
-// Export CSV
-function exportCSV(){
-if(data.length===0){alert('No data');return}
-let csv='Time,Open,High,Low,Close\n';
-data.forEach(c=>{
-const dt=new Date(c.time*1000).toISOString();
-csv+=`${dt},${c.open},${c.high},${c.low},${c.close}\n`;
-});
-const blob=new Blob([csv],{type:'text/csv'});
-const url=URL.createObjectURL(blob);
-const a=document.createElement('a');
-a.href=url;
-a.download=`${sym}_${gran}s.csv`;
-a.click();
-}
-
-// Export XLSX
-function exportXLSX(){
-if(data.length===0){alert('No data');return}
-const rows=[['Time','Open','High','Low','Close']];
-data.forEach(c=>{
-const dt=new Date(c.time*1000).toISOString();
-rows.push([dt,c.open,c.high,c.low,c.close]);
-});
-const ws=XLSX.utils.aoa_to_sheet(rows);
-const wb=XLSX.utils.book_new();
-XLSX.utils.book_append_sheet(wb,ws,'Data');
-XLSX.writeFile(wb,`${sym}_${gran}s.xlsx`);
-}
-
-// Run backtest
-function runBacktest(){
-if(data.length===0){alert('Load data first');return}
-const slP=parseFloat(document.getElementById('slP').value)||null;
-const tpP=parseFloat(document.getElementById('tpP').value)||null;
-const hold=parseInt(document.getElementById('hold').value)||5;
-if(!slP&&!tpP){alert('Enter SL% or TP%');return}
-markers=[];
-let wins=0,losses=0,totalPnL=0;
-for(let i=50;i<data.length-hold;i++){
-const sma20=data.slice(Math.max(0,i-19),i+1).reduce((a,b)=>a+b.close,0)/Math.min(20,i+1);
-const sma50=data.slice(Math.max(0,i-49),i+1).reduce((a,b)=>a+b.close,0)/Math.min(50,i+1);
-const prevSma20=data.slice(Math.max(0,i-20),i).reduce((a,b)=>a+b.close,0)/Math.min(20,i);
-const prevSma50=data.slice(Math.max(0,i-50),i).reduce((a,b)=>a+b.close,0)/Math.min(50,i);
-let side=null;
-if(sma20>sma50&&prevSma20<=prevSma50)side='buy';
-else if(sma20<sma50&&prevSma20>=prevSma50)side='sell';
-if(!side)continue;
-const entry=data[i].close;
-let exit=null,outcome=null;
-for(let j=i+1;j<=Math.min(i+hold,data.length-1);j++){
-const c=data[j];
-if(side==='buy'){
-if(slP&&((entry-c.low)/entry*100)>=slP){exit=entry*(1-slP/100);outcome='loss';break}
-if(tpP&&((c.high-entry)/entry*100)>=tpP){exit=entry*(1+tpP/100);outcome='win';break}
-}else{
-if(slP&&((c.high-entry)/entry*100)>=slP){exit=entry*(1+slP/100);outcome='loss';break}
-if(tpP&&((entry-c.low)/entry*100)>=tpP){exit=entry*(1-tpP/100);outcome='win';break}
-}
-if(j===Math.min(i+hold,data.length-1)){exit=c.close;outcome='hold'}
-}
-if(!exit)continue;
-const pnl=side==='buy'?(exit-entry)/entry*100:(entry-exit)/entry*100;
-totalPnL+=pnl;
-if(outcome==='win')wins++;else if(outcome==='loss')losses++;
-markers.push({time:data[i].time,position:side==='buy'?'belowBar':'aboveBar',color:outcome==='win'?'#0f0':outcome==='loss'?'#f33':'#ff0',shape:side==='buy'?'arrowUp':'arrowDown',text:outcome==='win'?'W':outcome==='loss'?'L':'H'});
-}
-series.setMarkers(markers);
-const total=wins+losses;
-const winRate=total>0?(wins/total*100).toFixed(1):0;
-document.getElementById('results').innerHTML=`<strong>Backtest Results</strong><br>Trades: ${total}<br>Wins: ${wins} | Losses: ${losses}<br>Win Rate: ${winRate}%<br>Total P&L: ${totalPnL.toFixed(2)}%`;
-}
+initChart();
+connectWS();
 }
 </script>
 
-<!-- ULTRA DATA CAPTURE - universal hook to expose chart data to ULTRA -->
-<script>
-(function(){
-  if(window.__ULTRA_DATA_HOOK) return; window.__ULTRA_DATA_HOOK = true;
-  function tryExpose(arr){
-    try{
-      if(!arr || !Array.isArray(arr) || arr.length<2) return false;
-      if(!arr[0] || typeof arr[0] !== 'object') return false;
-      if(('time' in arr[0]) && ('open' in arr[0]) && ('high' in arr[0]) && ('low' in arr[0]) && ('close' in arr[0])){
-        window.chartDataArray = arr;
-        window.ultraDataReady = true;
-        return true;
-      }
-    }catch(e){}
-    return false;
-  }
-  var tries = 0, maxTries = 600;
-  var poll = setInterval(function(){
-    tries++;
-    try{
-      var candidates = [
-        window.chartDataArray,
-        window.data,
-        window.priceData,
-        window.ohlc,
-        window.candles,
-        window.chartSeriesData,
-        window.priceList,
-        window.chartData,
-        window.seriesData,
-        window.seriesPoints,
-        window.windowData
-      ];
-      for(var i=0;i<candidates.length;i++){
-        if(tryExpose(candidates[i])){ clearInterval(poll); return; }
-      }
-      if(window.series && typeof window.series.getData === 'function'){
-        try{ var sd = window.series.getData(); if(tryExpose(sd)){ clearInterval(poll); return; } }catch(e){}
-      }
-      var names = Object.keys(window);
-      for(var j=0;j<names.length && j<200;j++){
-        var n = names[j];
-        if(/data|candles|series|chart/i.test(n) && n.length<30){
-          try{ var val = window[n]; if(tryExpose(val)){ clearInterval(poll); return; } }catch(e){}
-        }
-      }
-    }catch(e){}
-    if(tries>maxTries){ clearInterval(poll); window.ultraDataReady = false; return; }
-  },200);
-  window.__ultra_hook_tryExpose = tryExpose;
-  setTimeout(function(){
-    try{
-      if(window.series && window.series.setData){
-        var orig = window.series.setData;
-        window.series.setData = function(d){ try{ tryExpose(d); }catch(e){}; return orig.apply(this, arguments); };
-      }
-    }catch(e){}
-  },500);
-})();
-</script>
-<!-- END ULTRA DATA CAPTURE -->
-<!-- BEGIN: ULTRA PRO MASTER (Inserted) -->
-<div id="ai-ultra-final" style="padding:12px;background:#040704;border-top:2px solid #222;color:#9efca0;">
-  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <button id="ultraRunFinal" style="padding:8px;border-radius:6px;background:#000;border:1px solid #333;color:#9efca0">Run ULTRA Analysis</button>
-    <button id="ultraExportFinal" disabled style="padding:8px;border-radius:6px;background:#000;border:1px solid #333;color:#9efca0">Export ULTRA CSV</button>
-    <button id="ultraBacktestFinal" style="padding:8px;border-radius:6px;background:#000;border:1px solid #333;color:#9efca0">Backtest AI Signals</button>
-    <button id="ultraPreviewFinal" style="padding:8px;border-radius:6px;background:#000;border:1px solid #333;color:#9efca0">Preview Sample Row</button>
-    <label style="color:#7efc8a">Rows:</label>
-    <select id="ultraRowsFinal" style="padding:6px;background:#000;color:#fff">
-      <option value="5000">5K</option>
-      <option value="10000" selected>10K</option>
-      <option value="20000">20K</option>
-      <option value="all">All</option>
-    </select>
-    <label style="color:#7efc8a">Overlays:</label><button id="toggleOverlays" style="padding:6px;border-radius:6px;background:#000;border:1px solid #333;color:#9efca0">Show</button>
-    <label style="color:#7efc8a">Deep SMC:</label><button id="toggleDeepSMC" style="padding:6px;border-radius:6px;background:#000;border:1px solid #333;color:#9efca0">Enable</button>
-    <span id="ultraStatusFinal" style="margin-left:auto;color:#9efca0">ULTRA Ready - Click Run Analysis</span>
-  </div>
-  <div id="ultraPreviewBoxFinal" style="margin-top:10px;display:none;background:#020402;padding:10px;border-radius:6px;border:1px solid #222;max-height:260px;overflow:auto;font-size:13px"></div>
-  <div id="ultraResultsFinal" style="margin-top:8px;color:#9efca0;font-size:13px"></div>
-</div>
-
-<script>
-(function(){
-  if(window.__ULTRA_PRO_MASTER_INJECTED) return; window.__ULTRA_PRO_MASTER_INJECTED = true;
-  function q(id){return document.getElementById(id);}
-  function round(v,dp=6){ if(v===null||v===undefined||isNaN(v)) return null; return Math.round(v*Math.pow(10,dp))/Math.pow(10,dp); }
-  function toISO(ts){ return (new Date(ts*1000)).toISOString(); }
-  function safeDiv(a,b){ return (b===0||b===null||b===undefined)?0:(a/b); }
-  function emaArr(arr, period, selector='close'){ const out=new Array(arr.length).fill(null); if(arr.length===0) return out; const k=2/(period+1); out[0]=arr[0][selector]||0; for(let i=1;i<arr.length;i++){ const v=arr[i][selector]||0; out[i] = (v - out[i-1])*k + out[i-1]; } return out; }
-  function smaArr(arr, period, selector='close'){ const out=new Array(arr.length).fill(null); let sum=0; for(let i=0;i<arr.length;i++){ const v=arr[i][selector]||0; sum+=v; if(i>=period) sum -= arr[i-period][selector]||0; if(i>=period-1) out[i]=sum/period; } return out; }
-  function rsiArr(arr, period=14){ const out=new Array(arr.length).fill(null); let gain=0, loss=0; for(let i=1;i<arr.length;i++){ const ch=arr[i].close - arr[i-1].close; const g=Math.max(0,ch), l=Math.max(0,-ch); if(i<=period){ gain+=g; loss+=l; if(i===period) out[i]=100-(100/(1+(gain/period)/(loss/period||1e-9))); } else { gain=(gain*(period-1)+g)/period; loss=(loss*(period-1)+l)/period; const rs=gain/(loss||1e-9); out[i]=100-(100/(1+rs)); } } return out; }
-  function atrArr(arr, period=14){ const out=new Array(arr.length).fill(null); if(arr.length<2) return out; let prevClose=arr[0].close; const trs=[]; for(let i=1;i<arr.length;i++){ const tr=Math.max(arr[i].high-arr[i].low, Math.abs(arr[i].high-prevClose), Math.abs(arr[i].low-prevClose)); trs.push(tr); prevClose=arr[i].close; } let atr=0; for(let i=0;i<trs.length;i++){ if(i<period){ atr+=trs[i]; if(i===period-1){ atr/=period; out[i+1]=atr; } } else { atr = ((atr*(period-1)) + trs[i]) / period; out[i+1]=atr; } } return out; }
-  function macdArr(arr, fast=12, slow=26, signal=9){ const f=emaArr(arr,fast), s=emaArr(arr,slow); const macd=f.map((v,i)=> (v||0)-(s[i]||0)); const macdData=macd.map(v=>({close:v||0})); const sig=emaArr(macdData,signal,'close'); const hist=macd.map((v,i)=> v - (sig[i]||0)); return {macd,sig,hist}; }
-  function vwapArr(arr){ const out=new Array(arr.length).fill(null); let cumPV=0,cumV=0; for(let i=0;i<arr.length;i++){ const tp=(arr[i].high+arr[i].low+arr[i].close)/3; const vol=arr[i].volume||0; cumPV+=tp*vol; cumV+=vol; out[i]=cumV?cumPV/cumV:null;} return out; }
-  function obvArr(arr){ const out=new Array(arr.length).fill(0); let obv=0; for(let i=1;i<arr.length;i++){ if(!arr[i].volume) out[i]=obv; else { if(arr[i].close>arr[i-1].close) obv+=arr[i].volume; else if(arr[i].close<arr[i-1].close) obv-=arr[i].volume; out[i]=obv; } } return out; }
-  function swingHL(arr, look=3){ const high=new Array(arr.length).fill(0), low=new Array(arr.length).fill(0); for(let i=look;i<arr.length-look;i++){ let isH=true,isL=true; for(let k=1;k<=look;k++){ if(arr[i].high<=arr[i-k].high||arr[i].high<=arr[i+k].high) isH=false; if(arr[i].low>=arr[i-k].low||arr[i].low>=arr[i+k].low) isL=false; } if(isH) high[i]=1; if(isL) low[i]=1; } return {high,low}; }
-  function fvgAndOrderBlocks(arr){ const fvgU=new Array(arr.length).fill(null), fvgL=new Array(arr.length).fill(null); const obHigh=new Array(arr.length).fill(null), obLow=new Array(arr.length).fill(null), obType=new Array(arr.length).fill(null); for(let i=2;i<arr.length;i++){ const c1=arr[i-2], c2=arr[i-1]; if(c1.high < c2.low){ fvgL[i]=c1.high; fvgU[i]=c2.low; } if(c1.low > c2.high){ fvgL[i]=c2.high; fvgU[i]=c1.low; } const body=Math.abs(c2.close-c2.open), range=c2.high-c2.low; if(body > range*0.6){ obHigh[i]=c2.high; obLow[i]=c2.low; obType[i]=c2.close>c2.open?'bull':'bear'; } } return {fvgU,fvgL,obHigh,obLow,obType}; }
-  function equalHighLow(arr,tol=0.00005){ const eqH=new Array(arr.length).fill(0), eqL=new Array(arr.length).fill(0); for(let i=1;i<arr.length;i++){ if(Math.abs(arr[i].high - arr[i-1].high) <= tol) eqH[i]=1; if(Math.abs(arr[i].low - arr[i-1].low) <= tol) eqL[i]=1; } return {eqH,eqL}; }
-  function buildHeaders(){ return ['time','iso_time','open','high','low','close','volume','ema_20','ema_50','ema_200','sma50','sma200','rsi','macd_line','macd_signal','macd_hist','atr','bb_upper','bb_middle','bb_lower','vwap','obv','swing_high','swing_low','bos','choch','order_block_high','order_block_low','order_block_type','fvg_upper','fvg_lower','premium_zone','discount_zone','vol_ma','vol_spike','buy_volume','sell_volume','imbalance_ratio','rel_volume','htf_trend','equal_high','equal_low','breaker_block','mitigation_block','displacement','structure_score','momentum_score','volume_score','composite_confidence','ai_signal','ai_entry','ai_sl','ai_tp1','ai_tp2','ai_rr','ai_confidence','bt_outcome','bt_exit_time','bt_pnl_percent','session_name','time_of_day','weekday']; }
-  function computeUltra(fullData){
-    if(!Array.isArray(fullData) || fullData.length===0) return;
-    const n=fullData.length;
-    const ema20=emaArr(fullData,20), ema50=emaArr(fullData,50), ema200=emaArr(fullData,200);
-    const sma50=smaArr(fullData,50), sma200=smaArr(fullData,200);
-    const rsi=rsiArr(fullData,14), macd=macdArr(fullData), atr=atrArr(fullData,14);
-    const psar = []; const st = []; const vwap = vwapArr(fullData); const obv = obvArr(fullData);
-    const swings = swingHL(fullData,3); const fvgOb = fvgAndOrderBlocks(fullData); const equal = equalHighLow(fullData);
-    const closes = fullData.map(c=>c.close); const std20 = (function(){ const out=new Array(n).fill(null); for(let i=19;i<n;i++){ const slice = closes.slice(i-19,i+1); const mean = slice.reduce((a,b)=>a+b,0)/20; const s = Math.sqrt(slice.reduce((a,b)=>a+(b-mean)*(b-mean),0)/20); out[i]=s; } return out; })();
-    const volArr = fullData.map(c=>c.volume||0); const volMa = smaArr(fullData.map((c,i)=>({close:volArr[i]})),20,'close');
-    const relVol = volArr.map((v,i)=> volMa[i]? v/volMa[i]:1); const buyVol = fullData.map((c,i)=> c.close>c.open? (c.volume||0):0); const sellVol = fullData.map((c,i)=> c.close<c.open? (c.volume||0):0);
-    const detectedGran = (window.gran||window.tf||60); const htfStep = (typeof window.ULTRA_PRO_HTF === 'function')? window.ULTRA_PRO_HTF(detectedGran) : 5;
-    for(let i=0;i<n;i++){
-      const c=fullData[i]; const ai={};
-      ai.ema_20=round(ema20[i]); ai.ema_50=round(ema50[i]); ai.ema_200=round(ema200[i]); ai.sma50=round(sma50[i]); ai.sma200=round(sma200[i]);
-      ai.rsi=round(rsi[i]); ai.macd_line=round(macd.macd[i]); ai.macd_signal=round(macd.sig[i]); ai.macd_hist=round(macd.hist[i]);
-      ai.atr=round(atr[i]); ai.bb_upper = std20[i]? round(sma50[i] + 2*std20[i]) : null; ai.bb_middle=round(sma50[i]); ai.bb_lower = std20[i]? round(sma50[i] - 2*std20[i]) : null;
-      ai.vwap=round(vwap[i]); ai.obv=round(obv[i]);
-      ai.swing_high = swings.high[i]; ai.swing_low = swings.low[i]; ai.bos = (i>2 && fullData[i].high>fullData[i-1].high && fullData[i-1].high>fullData[i-2].high)?1:0; ai.choch=(i>2 && ((fullData[i].high>fullData[i-1].high && fullData[i].low < fullData[i-1].low)))?1:0;
-      ai.order_block_high = fvgOb.obHigh[i]; ai.order_block_low = fvgOb.obLow[i]; ai.order_block_type = fvgOb.obType[i];
-      ai.fvg_upper = round(fvgOb.fvgU[i]); ai.fvg_lower = round(fvgOb.fvgL[i]);
-      ai.premium_zone = (ai.vwap && c.close > ai.vwap)?1:0; ai.discount_zone = (ai.vwap && c.close < ai.vwap)?1:0;
-      ai.vol_ma = round(volMa[i]||0); ai.vol_spike = (relVol[i]>1.8)?1:0; ai.buy_volume = buyVol[i]||0; ai.sell_volume = sellVol[i]||0; ai.imbalance_ratio = round(safeDiv(ai.buy_volume, (ai.sell_volume||1))); ai.rel_volume = round(relVol[i]||1);
-      ai.equal_high = equal.eqH[i]||0; ai.equal_low = equal.eqL[i]||0;
-      ai.breaker_block = 0; ai.mitigation_block = 0;
-      ai.displacement = round(Math.abs(c.close - c.open) / (ai.atr || 1));
-      let sscore=0; if(ai.bos) sscore+=2; if(ai.choch) sscore+=1.5; if(ai.order_block_type) sscore+=1; if(ai.fvg_upper||ai.fvg_lower) sscore+=1; ai.structure_score = round(sscore);
-      let mscore=0; if(ai.macd_hist && ai.macd_hist>0) mscore+=1; if(ai.rsi && ai.rsi>50) mscore+=1; ai.momentum_score = round(mscore);
-      ai.volume_score = round(ai.vol_spike?2: (ai.rel_volume>1.2?1:0));
-      let composite = safeDiv(sscore*0.4 + mscore*0.3 + ai.volume_score*0.3, 4.0); composite = Math.min(1, composite); ai.composite_confidence = round(composite,3);
-      ai.ai_signal='NO_SIGNAL'; ai.ai_entry=null; ai.ai_sl=null; ai.ai_tp1=null; ai.ai_tp2=null; ai.ai_rr=null; ai.ai_confidence=null;
-      const bullishCond = (ai.bos===1 || ai.choch===1) && (ai.order_block_type==='bull' || ai.fvg_lower) && (ai.composite_confidence>=0.45);
-      const bearishCond = (ai.bos===1 || ai.choch===1) && (ai.order_block_type==='bear' || ai.fvg_upper) && (ai.composite_confidence>=0.45);
-      function findRecentSwingLow(idx){ for(let k=idx;k>Math.max(0,idx-30);k--) if(swings.low[k]) return fullData[k].low; return fullData[Math.max(0,idx-3)].low; }
-      function findRecentSwingHigh(idx){ for(let k=idx;k>Math.max(0,idx-30);k--) if(swings.high[k]) return fullData[k].high; return fullData[Math.max(0,idx-3)].high; }
-      if(bullishCond){ ai.ai_signal='BUY'; ai.ai_entry=round(c.close); const slBase=findRecentSwingLow(i) || (c.close - (ai.atr||0)*1.5); ai.ai_sl=round(slBase*0.999); ai.ai_tp1 = ai.fvg_upper || ai.order_block_high || round(ai.vwap + (c.close - ai.ai_sl)*1.5); ai.ai_tp2 = round(ai.ai_entry + (ai.ai_entry - ai.ai_sl)*5); ai.ai_rr = round(safeDiv(ai.ai_tp1 - ai.ai_entry, ai.ai_entry - ai.ai_sl)); ai.ai_confidence = round(ai.composite_confidence,3); }
-      else if(bearishCond){ ai.ai_signal='SELL'; ai.ai_entry=round(c.close); const slBase=findRecentSwingHigh(i) || (c.close + (ai.atr||0)*1.5); ai.ai_sl=round(slBase*1.001); ai.ai_tp1 = ai.fvg_lower || ai.order_block_low || round(ai.vwap - (ai.ai_sl - c.close)*1.5); ai.ai_tp2 = round(ai.ai_entry - (ai.ai_sl - ai.ai_entry)*5); ai.ai_rr = round(safeDiv(ai.ai_entry - ai.ai_tp1, ai.ai_sl - ai.ai_entry)); ai.ai_confidence = round(ai.composite_confidence,3); }
-      ai.bt_outcome = null; ai.bt_exit_time = null; ai.bt_pnl_percent = null;
-      ai.session_name = ((new Date(c.time*1000)).getUTCHours()>=8 && (new Date(c.time*1000)).getUTCHours()<16)?'London': ((new Date(c.time*1000)).getUTCHours()<8)?'Asia':'NY';
-      ai.time_of_day = (new Date(c.time*1000)).toISOString().split('T')[1].split('.')[0];
-      ai.weekday = (new Date(c.time*1000)).getUTCDay();
-      c.aiUltraFinal = ai;
-    }
-    return fullData;
-  }
-  function exportUltraCSV(fullData){ if(!fullData || fullData.length===0){ alert('No data'); return; } const headers = buildHeaders(); const rows=[headers.join(',')]; for(let i=0;i<fullData.length;i++){ const c=fullData[i]; const ai=c.aiUltraFinal||{}; const base=[c.time||'', toISO(c.time)||'', c.open, c.high, c.low, c.close, c.volume||'']; const rest = headers.slice(7).map(h => { const v = ai[h]!==undefined && ai[h]!==null ? ai[h] : ''; return (typeof v === 'string' && v.includes(','))? '"' + v.replace(/"/g,'""') + '"' : v; }); rows.push([...base, ...rest].join(',')); } const blob=new Blob([rows.join('\n')], {type:'text/csv'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download = ( (typeof sym === 'string' && sym) ? sym : (window.sym && window.sym.value) ? window.sym.value : 'symbol' ) + '_' + ( (typeof gran !== 'undefined') ? gran : (window.gran || 'tf') ) + '_ULTRA_MASTER.csv'; a.click(); URL.revokeObjectURL(url); }
-  function backtestAI(fullData, maxHold=200){ if(!fullData || fullData.length===0) return {trades:0,wins:0,losses:0,winRate:0,totalPnL:0,details:[]}; let trades=0,wins=0,losses=0,totalPnL=0,details=[]; for(let i=0;i<fullData.length;i++){ const ai=fullData[i].aiUltraFinal; if(!ai || !ai.ai_signal || ai.ai_signal==='NO_SIGNAL') continue; trades++; const entry = ai.ai_entry || fullData[i].close; const sl = ai.ai_sl || (entry - (ai.atr||0.001)); const tp = ai.ai_tp1 || (entry + (ai.atr||0.001)); let outcome='hold', exitPrice = fullData[Math.min(fullData.length-1,i+maxHold)].close; for(let j=i+1;j<Math.min(fullData.length, i+maxHold); j++){ const c=fullData[j]; if(ai.ai_signal==='BUY'){ if(c.low <= sl){ outcome='loss'; exitPrice=sl; break } if(c.high >= tp){ outcome='win'; exitPrice=tp; break } } else if(ai.ai_signal==='SELL'){ if(c.high >= sl){ outcome='loss'; exitPrice=sl; break } if(c.low <= tp){ outcome='win'; exitPrice=tp; break } } } const pnl = ai.ai_signal==='BUY'? (exitPrice - entry)/entry*100 : (entry - exitPrice)/entry*100; if(outcome==='win') wins++; else if(outcome==='loss') losses++; totalPnL += pnl; details.push({time:fullData[i].time, side:ai.ai_signal, entry, sl, tp, exit:exitPrice, outcome, pnl}); fullData[i].aiUltraFinal.bt_outcome = outcome; fullData[i].aiUltraFinal.bt_exit_time = new Date().toISOString(); fullData[i].aiUltraFinal.bt_pnl_percent = round(pnl,4); } const winRate = trades? round(wins/trades*100,2) : 0; return {trades,wins,losses,winRate,totalPnL: round(totalPnL,4), details}; }
-  window.__ultra_lines = window.__ultra_lines || []; var ULTRA_PRO = { overlaysShown:false, deepSMCEnabled:true, htfMultiplierForGran:function(g){ if(!g) return 5; if(g<=60) return 5; if(g<=300) return 12; if(g<=900) return 4; if(g<=3600) return 4; return 1; },
-    drawPreviewLines:function(row){ try{ if(window.__ultra_lines && window.__ultra_lines.length){ window.__ultra_lines.forEach(l=>{ try{ series.removePriceLine(l) }catch(e){} }); } window.__ultra_lines=[]; if(!row||!row.aiUltraFinal) return; const ai=row.aiUltraFinal; if(ai.ai_entry) window.__ultra_lines.push(series.createPriceLine({price:ai.ai_entry, color: 'rgba(0,255,0,0.9)',lineWidth:2,lineStyle:0})); if(ai.ai_sl) window.__ultra_lines.push(series.createPriceLine({price:ai.ai_sl, color: 'rgba(255,0,0,0.9)',lineWidth:2,lineStyle:2})); if(ai.ai_tp1) window.__ultra_lines.push(series.createPriceLine({price:ai.ai_tp1, color: 'rgba(0,200,255,0.9)',lineWidth:2,lineStyle:0})); }catch(e){console.warn('ULTRA: drawPreviewLines error',e);} },
-    drawOrderBlocksMarkers:function(fullData,fvgOb,maxMarkers=200){ try{ if(!ULTRA_PRO.overlaysShown) return; const m=[]; for(let i=0;i<fullData.length;i++){ if(fvgOb.obHigh && fvgOb.obHigh[i] && fvgOb.obLow && fvgOb.obLow[i]){ m.push({time: fullData[i].time, position: 'aboveBar', color: '#ffaa00', shape: 'circle', text: 'FVG'}); } else if(fvgOb.obHigh && fvgOb.obHigh[i]){ m.push({time: fullData[i].time, position: 'aboveBar', color: '#0ff', shape: 'square', text: 'OB'}); } else if(fvgOb.obLow && fvgOb.obLow[i]){ m.push({time: fullData[i].time, position: 'belowBar', color: '#0f0', shape: 'square', text: 'OB'}); } if(m.length>=maxMarkers) break; } series.setMarkers(m); }catch(e){console.warn('ULTRA: drawOrderBlocksMarkers error',e);} } };
-  document.addEventListener('click', function(e){ if(e.target && e.target.id==='toggleOverlays'){ ULTRA_PRO.overlaysShown = !ULTRA_PRO.overlaysShown; e.target.textContent = ULTRA_PRO.overlaysShown ? 'Hide' : 'Show'; const fd = window.chartDataArray || window.data || window.dataSource; if(fd && fd.length>0){ const subset = fd.slice(Math.max(0, fd.length - 2000)); const computed = computeUltra(subset); ULTRA_PRO.drawOrderBlocksMarkers(subset, {obHigh:subset.map(x=>x.aiUltraFinal?x.aiUltraFinal.order_block_high:null), obLow:subset.map(x=>x.aiUltraFinal?x.aiUltraFinal.order_block_low:null)}); } } else if(e.target && e.target.id==='toggleDeepSMC'){ ULTRA_PRO.deepSMCEnabled = !ULTRA_PRO.deepSMCEnabled; e.target.textContent = ULTRA_PRO.deepSMCEnabled ? 'Disable' : 'Enable'; } });
-  function exposeData(){ try{ if(window.chartDataArray && Array.isArray(window.chartDataArray)) return window.chartDataArray; if(typeof data !== 'undefined' && Array.isArray(data)){ window.chartDataArray = data; return data;} if(window.data && Array.isArray(window.data)){ window.chartDataArray = window.data; return window.data;} }catch(e){} return null; }
-  function waitForData(timeoutMs, intervalMs){ return new Promise(function(resolve,reject){ const start=Date.now(); const id=setInterval(function(){ const d=exposeData(); if(d && d.length>0){ clearInterval(id); resolve(d); } if(Date.now()-start>timeoutMs){ clearInterval(id); reject(new Error('Timeout waiting for chart data')); } }, intervalMs||250); }); }
-  waitForData(30000,250).then(function(fullData){ const run=q('ultraRunFinal'), exp=q('ultraExportFinal'), btest=q('ultraBacktestFinal'), prev=q('ultraPreviewFinal'); const rowsSel=q('ultraRowsFinal'), status=q('ultraStatusFinal'), previewBox=q('ultraPreviewBoxFinal'), results=q('ultraResultsFinal'); function computeAndAttach(){ const sel=rowsSel.value; const subset=(sel==='all')? fullData : fullData.slice(Math.max(0, fullData.length - parseInt(sel))); computeUltra(subset); if(sel !== 'all'){ const start = Math.max(0, fullData.length - subset.length); for(let i=0;i<subset.length;i++) fullData[start+i].aiUltraFinal = subset[i].aiUltraFinal; } status.textContent = 'ULTRA Master: Analysis Complete'; try{ if(exp) exp.disabled = false; }catch(e){} const last=subset[subset.length-1]; ULTRA_PRO.drawPreviewLines(last); ULTRA_PRO.drawOrderBlocksMarkers(subset,{obHigh:subset.map(x=>x.aiUltraFinal?x.aiUltraFinal.order_block_high:null), obLow:subset.map(x=>x.aiUltraFinal?x.aiUltraFinal.order_block_low:null)}); alert('ULTRA Master analysis finished.'); } run.addEventListener('click', function(){ status.textContent='Running ULTRA...'; setTimeout(computeAndAttach,50); }); exp.addEventListener('click', function(){ const sel=rowsSel.value; const subset=(sel==='all')? fullData : fullData.slice(Math.max(0, fullData.length - parseInt(sel))); if(!subset.some(x=>x.aiUltraFinal)) computeUltra(subset); exportUltraCSV(subset); status.textContent='CSV exported'; }); btest.addEventListener('click', function(){ const sel=rowsSel.value; const subset=(sel==='all')? fullData : fullData.slice(Math.max(0, fullData.length - parseInt(sel))); if(!subset.some(x=>x.aiUltraFinal)) computeUltra(subset); const res=backtestAI(subset,200); results.innerHTML = '<strong>Backtest</strong> Trades: '+res.trades+' | Wins: '+res.wins+' | Losses: '+res.losses+' | WinRate: '+res.winRate+'% | TotalPnL%: '+res.totalPnL; status.textContent='Backtest complete'; }); prev.addEventListener('click', function(){ const sel=rowsSel.value; const subset=(sel==='all')? fullData : fullData.slice(Math.max(0, fullData.length - parseInt(sel))); if(!subset.some(x=>x.aiUltraFinal)) computeUltra(subset); const last=subset[subset.length-1]; previewBox.style.display='block'; previewBox.innerHTML = '<pre style=\"white-space:pre-wrap\">'+JSON.stringify(last.aiUltraFinal,null,2)+'</pre>'; status.textContent='Preview ready'; ULTRA_PRO.drawPreviewLines(last); }); status.textContent='ULTRA Master: Ready'; }).catch(function(err){ console.warn('ULTRA Master: data not found or timeout',err); const status=q('ultraStatusFinal'); if(status) status.textContent='ULTRA Master: No data found'; });
-  setTimeout(function(){ try{ const ui=q('ai-ultra-final'); if(ui){ ui.style.position='relative'; ui.style.zIndex='1000'; ui.style.margin='8px auto 20px auto'; ui.style.maxWidth='1200px'; ui.style.width='calc(100% - 24px)'; if(ui.parentElement!==document.body) document.body.appendChild(ui); } const chartDiv=document.getElementById('chart'); if(chartDiv){ chartDiv.style.marginTop='0'; chartDiv.style.paddingTop='0'; } }catch(e){console.warn('ULTRA layout fixer error',e);} },500);
-})();</script>
-<!-- END: ULTRA PRO MASTER -->
 </body>
 </html>
- 
